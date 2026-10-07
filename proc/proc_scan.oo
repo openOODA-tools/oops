@@ -1,0 +1,85 @@
+// # Process Scanner - Discovery of Active Tasks from Virtual FS
+//
+// Logline: Scans the /proc filesystem collecting validated ProcessInfo records.
+//
+// Setup: Requires FsReadCap. Discovers all accessible task descriptors.
+//
+// Beats:
+//   1. Enumerate top-level directory entries in /proc.
+//   2. Filter for purely numeric entries corresponding to active process IDs.
+//   3. Decode each task into ProcessInfo records ignoring stale or exited tasks.
+//   4. Accumulate and return the full list of discovered processes.
+
+import "std/fs/os/fs.oo";
+import "proc_info.oo";
+
+pub fn is_all_digits(s: String) -> Bool {
+    let n: Int = chars_len(s);
+    if n == 0 { return false; }
+    let mut i: Int = 0;
+    while i < n {
+        let b: Int = byte_at(s, i);
+        if b < 48 || b > 57 {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+pub fn scan_all_processes(fs: &FsReadCap) -> List[ProcessInfo] {
+    let mut procs: List[ProcessInfo] = list_new();
+    let entries: List[String] = fs_read_dir(fs, "/proc");
+    let n: Int = list_len(entries);
+    let mut i: Int = 0;
+
+    while i < n {
+        let entry: String = list_get(entries, i);
+        if is_all_digits(entry) {
+            let res: Result[ProcessInfo, String] = read_process_info(fs, entry);
+            if res.is_ok() {
+                let info: ProcessInfo = match res {
+                    Ok(p) => p,
+                    Err(_) => process_info_default()
+                };
+                if info.pid > 0 {
+                    procs = list_push(procs, info);
+                }
+            }
+        }
+        i = i + 1;
+    }
+
+    return procs;
+}
+
+pub fn filter_by_slice(procs: List[ProcessInfo], slice_filter: String) -> List[ProcessInfo] {
+    if slice_filter == "" || slice_filter == "all" {
+        return procs;
+    }
+    let mut out: List[ProcessInfo] = list_new();
+    let n: Int = list_len(procs);
+    let mut i: Int = 0;
+    while i < n {
+        let p: ProcessInfo = list_get(procs, i);
+        if str_contains(p.slice, slice_filter) {
+            out = list_push(out, p);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+pub fn find_by_name(procs: List[ProcessInfo], name_query: String) -> List[ProcessInfo] {
+    let mut out: List[ProcessInfo] = list_new();
+    let n: Int = list_len(procs);
+    let mut i: Int = 0;
+    while i < n {
+        let p: ProcessInfo = list_get(procs, i);
+        if str_contains(p.comm, name_query) {
+            out = list_push(out, p);
+        }
+        i = i + 1;
+    }
+    return out;
+}

@@ -1,0 +1,132 @@
+// # Process Information Model and /proc Decoders
+//
+// Logline: Decodes Linux /proc stat, comm, and cgroup records into structured ProcessInfo.
+//
+// Setup: Requires FsReadCap to inspect process virtual filesystem entries. Zero ambient authority.
+//
+// Beats:
+//   1. Define ProcessInfo record holding pid, ppid, comm, state, slice, and thread count.
+//   2. Parse /proc/<pid>/stat extracting comm, execution state, and parent process ID.
+//   3. Classify systemd cgroup slices (system.slice, user.slice, init.scope, kernel).
+//   4. Construct validated ProcessInfo models for discovered tasks.
+
+pub type ProcessInfo = struct {
+    pid: Int,
+    ppid: Int,
+    comm: String,
+    state: String,
+    slice: String,
+    threads: Int
+};
+
+pub fn process_info_default() -> ProcessInfo {
+    return ProcessInfo {
+        pid: 0,
+        ppid: 0,
+        comm: "",
+        state: "?",
+        slice: "unknown",
+        threads: 1
+    };
+}
+
+pub fn parse_slice_from_cgroup(cgroup_content: String) -> String {
+    if str_contains(cgroup_content, "/system.slice") {
+        return "system.slice";
+    }
+    if str_contains(cgroup_content, "/user.slice") {
+        return "user.slice";
+    }
+    if str_contains(cgroup_content, "/init.scope") {
+        return "init.scope";
+    }
+    if str_contains(cgroup_content, "machine.slice") {
+        return "machine.slice";
+    }
+    return "other";
+}
+
+pub fn parse_int_field(s: String) -> Int {
+    let trimmed: String = str_trim(s);
+    let n: Int = chars_len(trimmed);
+    let mut val: Int = 0;
+    let mut i: Int = 0;
+    while i < n {
+        let b: Int = byte_at(trimmed, i);
+        if b >= 48 && b <= 57 {
+            val = (val * 10) + (b - 48);
+        } else {
+            return val;
+        }
+        i = i + 1;
+    }
+    return val;
+}
+
+pub fn find_last_char(s: String, target: String) -> Int {
+    let n: Int = chars_len(s);
+    let mut i: Int = n - 1;
+    while i >= 0 {
+        if char_at(s, i) == target {
+            return i;
+        }
+        i = i - 1;
+    }
+    return -1;
+}
+
+pub fn read_process_info(fs: &FsReadCap, pid_str: String) -> Result[ProcessInfo, String] {
+    let pid_val: Int = parse_int_field(pid_str);
+    if pid_val <= 0 {
+        return Err("INVALID_PID");
+    }
+
+    let stat_path: String = "/proc/" + pid_str + "/stat";
+    let stat_res: Result[String, String] = read_file(fs, stat_path);
+    if stat_res.is_err() {
+        return Err("STAT_UNREADABLE");
+    }
+    let stat: String = match stat_res { Ok(s) => s, Err(_) => "" };
+
+    let open_paren: Int = str_index_of(stat, "(");
+    let close_paren: Int = find_last_char(stat, ")");
+
+    if open_paren < 0 || close_paren <= open_paren {
+        return Err("MALFORMED_STAT");
+    }
+
+    let mut comm: String = str_slice(stat, open_paren + 1, close_paren);
+    let comm_path: String = "/proc/" + pid_str + "/comm";
+    let cr: Result[String, String] = read_file(fs, comm_path);
+    if cr.is_ok() {
+        let direct_comm: String = str_trim(match cr { Ok(c) => c, Err(_) => "" });
+        if chars_len(direct_comm) > 0 {
+            comm = direct_comm;
+        }
+    }
+
+    let rest: String = str_trim(str_slice(stat, close_paren + 1, chars_len(stat)));
+    let state_ch: String = if chars_len(rest) > 0 { char_at(rest, 0) } else { "?" };
+
+    let after_state: String = if chars_len(rest) > 2 { str_trim(str_slice(rest, 2, chars_len(rest))) } else { "" };
+    let ppid_sp: Int = str_index_of(after_state, " ");
+    let ppid_str: String = if ppid_sp > 0 { str_slice(after_state, 0, ppid_sp) } else { after_state };
+    let ppid_val: Int = parse_int_field(ppid_str);
+
+    let cgroup_path: String = "/proc/" + pid_str + "/cgroup";
+    let cgroup_res: Result[String, String] = read_file(fs, cgroup_path);
+    let cgroup_content: String = match cgroup_res { Ok(cg) => cg, Err(_) => "" };
+    let mut slice_val: String = parse_slice_from_cgroup(cgroup_content);
+    if ppid_val == 2 || pid_val == 2 {
+        slice_val = "kernel";
+    }
+
+    return Ok(ProcessInfo {
+        pid: pid_val,
+        ppid: ppid_val,
+        comm: comm,
+        state: state_ch,
+        slice: slice_val,
+        threads: 1
+    });
+}

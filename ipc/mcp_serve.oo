@@ -1,0 +1,133 @@
+// # MCP Stdio Server - Process Visualization and Signal Control
+//
+// Logline: Speaks Model Context Protocol over stdio for LLM process inspection and control.
+//
+// Setup: Requires FsReadCap and ProcessCap. Zero ambient authority.
+//
+// Beats:
+//   1. Handle initialize and notifications/initialized lifecycle handshakes.
+//   2. Advertise process_tree, find_process, and send_signal tools.
+//   3. Dispatch tools/call requests and return structured process metadata.
+
+import "std/fs/process/signal.oo";
+import "proc/proc_info.oo";
+import "proc/proc_scan.oo";
+import "ipc/json_field.oo";
+
+fn build_error(id: String, code: Int, msg: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + to_string(code) + ",\"message\":\"" + json_escape(msg) + "\"}}";
+}
+
+fn build_tool_result(id: String, text: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + json_escape(text) + "\"}]}}";
+}
+
+fn handle_tool_call(fs: &FsReadCap, proc_cap: &ProcessCap, id: String, req: String) -> String {
+    let params: String = json_field_raw(req, "params");
+    let tool_name: String = json_field_string(params, "name");
+    let args: String = json_field_raw(params, "arguments");
+
+    if tool_name == "process_tree" {
+        let procs: List[ProcessInfo] = scan_all_processes(fs);
+        let filter: String = json_field_string(args, "slice");
+        let filtered: List[ProcessInfo] = filter_by_slice(procs, filter);
+        let mut out: String = "PID\tSTATE\tSLICE\tCOMM\n";
+        let n: Int = list_len(filtered);
+        let mut i: Int = 0;
+        while i < n {
+            let p: ProcessInfo = list_get(filtered, i);
+            out = out + to_string(p.pid) + "\t" + p.state + "\t" + p.slice + "\t" + p.comm + "\n";
+            i = i + 1;
+        }
+        return build_tool_result(id, out);
+    }
+
+    if tool_name == "find_process" {
+        let procs: List[ProcessInfo] = scan_all_processes(fs);
+        let query: String = json_field_string(args, "name");
+        let matches: List[ProcessInfo] = find_by_name(procs, query);
+        let mut out: String = "";
+        let n: Int = list_len(matches);
+        let mut i: Int = 0;
+        while i < n {
+            let p: ProcessInfo = list_get(matches, i);
+            out = out + to_string(p.pid) + " " + p.state + " " + p.slice + " " + p.comm + "\n";
+            i = i + 1;
+        }
+        return build_tool_result(id, out);
+    }
+
+    if tool_name == "send_signal" {
+        let raw_pid: String = json_field_raw(args, "pid");
+        let pid_val: Int = parse_int_field(raw_pid);
+        let sig_name: String = json_field_string(args, "signal");
+        let mut signum: Int = 15;
+        if sig_name == "KILL" || sig_name == "9" { signum = 9; }
+        else if sig_name == "HUP" || sig_name == "1" { signum = 1; }
+        else if sig_name == "INT" || sig_name == "2" { signum = 2; }
+        else if sig_name == "TERM" || sig_name == "15" { signum = 15; }
+
+        let r: Result[String, String] = signal_send(proc_cap, pid_val, signum);
+        if r.is_ok() {
+            return build_tool_result(id, "{\"pid\":" + to_string(pid_val) + ",\"signum\":" + to_string(signum) + ",\"status\":\"sent\"}");
+        }
+        return build_error(id, -32000, "signal dispatch failed");
+    }
+
+    return build_error(id, -32601, "unknown tool: " + tool_name);
+}
+
+fn handle_mcp_request(fs: &FsReadCap, proc_cap: &ProcessCap, req: String) -> String {
+    let method: String = json_field_string(req, "method");
+    let raw_id: String = json_field_raw(req, "id");
+    let id: String = if chars_len(raw_id) == 0 { "null" } else { raw_id };
+
+    if method == "initialize" {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"oops\",\"version\":\"0.1.0\"}}}";
+    }
+    if method == "notifications/initialized" {
+        return "";
+    }
+    if method == "tools/list" {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"tools\":[{\"name\":\"process_tree\",\"description\":\"List processes with systemd slice classification\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"slice\":{\"type\":\"string\"}}}},{\"name\":\"find_process\",\"description\":\"Find processes by name or pattern\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"]}},{\"name\":\"send_signal\",\"description\":\"Send POSIX signal to target PID\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"pid\":{\"type\":\"integer\"},\"signal\":{\"type\":\"string\"}},\"required\":[\"pid\"]}}]}}";
+    }
+    if method == "tools/call" {
+        return handle_tool_call(fs, proc_cap, id, req);
+    }
+    if method == "shutdown" {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":null}";
+    }
+    return build_error(id, -32601, "method not found: " + method);
+}
+
+pub fn run_mcp_server(fs: &FsReadCap, proc_cap: &ProcessCap) -> Int {
+    let mut buf: String = "";
+    let mut running: Bool = true;
+    while running {
+        let mut nl: Int = str_index_of(buf, "\n");
+        while nl >= 0 {
+            let line: String = str_trim(str_slice(buf, 0, nl));
+            buf = str_slice(buf, nl + 1, chars_len(buf));
+            if chars_len(line) > 0 {
+                let resp: String = handle_mcp_request(fs, proc_cap, line);
+                if chars_len(resp) > 0 {
+                    println(resp);
+                }
+            }
+            nl = str_index_of(buf, "\n");
+        }
+
+        let cr: Result[String, String] = oo_read_stdin_chunk(fs, 100);
+        if !cr.is_ok() {
+            running = false;
+        } else {
+            let chunk: String = match cr { Ok(s) => s, Err(_) => "" };
+            if chars_len(chunk) == 0 {
+                running = false;
+            } else {
+                buf = buf + chunk;
+            }
+        }
+    }
+    return 0;
+}

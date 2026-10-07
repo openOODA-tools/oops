@@ -1,0 +1,16 @@
+// # Render Subsystem Anchor
+//
+// Logline: Public export barrel for process tree formatting and terminal styling.
+//
+// Setup: Bridges theme resolution and ANSI terminal colorizers.
+//
+// Beats:
+//   1. Re-export resolve_ps_theme.
+//   2. Re-export render_process_row and color stylers.
+//   3. Expose subsystem anchor metadata.
+
+import "render_theme.oo";
+
+pub fn render_anchor_version() -> String {
+    return "0.1.0";
+}

@@ -1,0 +1,19 @@
+// # Process Subsystem Anchor
+//
+// Logline: Public export barrel for process discovery, inspection, and tree organization.
+//
+// Setup: Bridges ProcessInfo models, /proc decoders, and hierarchy builders.
+//
+// Beats:
+//   1. Re-export ProcessInfo record and /proc decoders.
+//   2. Re-export scan_all_processes and filter helpers.
+//   3. Re-export tree hierarchy builder and slice classifiers.
+//   4. Expose unified subsystem anchor.
+
+import "proc_info.oo";
+import "proc_scan.oo";
+import "proc_tree.oo";
+
+pub fn proc_anchor_version() -> String {
+    return "0.1.0";
+}

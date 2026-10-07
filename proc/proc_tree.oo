@@ -1,0 +1,80 @@
+// # Process Tree Hierarchy Builder
+//
+// Logline: Organizes flat process lists into parent-child hierarchies and slice clusters.
+//
+// Setup: Pure algorithm on in-memory ProcessInfo collections.
+//
+// Beats:
+//   1. Identify root tasks (systemd, kernel kthreadd, or orphaned parents).
+//   2. Query direct children for any specified parent PID.
+//   3. Partition tasks into systemd slice groups (system.slice, user.slice, kernel, other).
+//   4. Format process row entries with tree branch glyphs and slice badges.
+
+import "proc_info.oo";
+
+pub fn get_children(procs: List[ProcessInfo], parent_pid: Int) -> List[ProcessInfo] {
+    let mut out: List[ProcessInfo] = list_new();
+    let n: Int = list_len(procs);
+    let mut i: Int = 0;
+    while i < n {
+        let p: ProcessInfo = list_get(procs, i);
+        if p.ppid == parent_pid && p.pid != parent_pid {
+            out = list_push(out, p);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+pub fn has_pid(procs: List[ProcessInfo], target_pid: Int) -> Bool {
+    let n: Int = list_len(procs);
+    let mut i: Int = 0;
+    while i < n {
+        let p: ProcessInfo = list_get(procs, i);
+        if p.pid == target_pid {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+pub fn get_roots(procs: List[ProcessInfo]) -> List[ProcessInfo] {
+    let mut out: List[ProcessInfo] = list_new();
+    let n: Int = list_len(procs);
+    let mut i: Int = 0;
+    while i < n {
+        let p: ProcessInfo = list_get(procs, i);
+        if p.ppid == 0 || p.pid == 1 || (p.pid == 2 && p.ppid == 0) || !has_pid(procs, p.ppid) {
+            out = list_push(out, p);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+pub fn get_slice_badge(slice_name: String) -> String {
+    if slice_name == "system.slice" {
+        return "[system]";
+    }
+    if slice_name == "user.slice" {
+        return "[user]";
+    }
+    if slice_name == "init.scope" {
+        return "[init]";
+    }
+    if slice_name == "kernel" {
+        return "[kernel]";
+    }
+    return "[other]";
+}
+
+pub fn format_proc_line(p: ProcessInfo, prefix: String) -> String {
+    let pid_str: String = to_string(p.pid);
+    let mut padded_pid: String = pid_str;
+    while chars_len(padded_pid) < 7 {
+        padded_pid = " " + padded_pid;
+    }
+    let badge: String = get_slice_badge(p.slice);
+    return padded_pid + " " + p.state + " " + badge + " " + prefix + p.comm;
+}

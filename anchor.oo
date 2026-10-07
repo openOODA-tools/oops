@@ -1,0 +1,19 @@
+// # oops System Anchor - Process Tree Visualizer and Signal Controller
+//
+// Logline: Sovereign root export barrel for oops process management tooling.
+//
+// Setup: Pure module re-exports. Zero ambient authority.
+//
+// Beats:
+//   1. Expose proc inspection and scanning subsystem.
+//   2. Expose render theme and terminal formatter subsystem.
+//   3. Expose IPC options parser and MCP stdio service.
+//   4. Expose root system anchor version.
+
+import "proc/anchor.oo";
+import "render/anchor.oo";
+import "ipc/anchor.oo";
+
+pub fn oops_version() -> String {
+    return "0.1.0";
+}

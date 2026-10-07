@@ -1,0 +1,129 @@
+// # oops Entry Point - Process Tree Visualizer and Signal Controller
+//
+// Logline: Argument gate, /proc scanner, and systemd slice tree visualizer.
+//
+// Setup: Requires FsReadCap, ProcessCap, and EnvCap. Operates with zero ambient authority.
+//
+// Beats:
+//   1. Handle --help, --version, and --mcp early without side effects.
+//   2. Dispatch signal operations (-k <SIG> -p <PID>) under ProcessCap.
+//   3. Scan /proc virtual filesystem and filter by systemd slice or name.
+//   4. Render hierarchical process tree with oote ANSI color palette.
+
+import "proc/anchor.oo";
+import "render/anchor.oo";
+import "ipc/anchor.oo";
+import "std/fs/process/signal.oo";
+
+fn render_help() -> String {
+    return "Usage: oops [OPTIONS] [FILTER]\n\n" +
+        "Sovereign process tree visualizer and signal controller with systemd slice grouping.\n\n" +
+        "Options:\n" +
+        "  -t, --tree             Display processes in a hierarchical tree (default)\n" +
+        "      --flat             Display processes in flat listing\n" +
+        "  -s, --slice <name>     Filter processes by systemd slice (e.g. system, user, kernel)\n" +
+        "  -k, --kill <SIG>       Send signal to target process (TERM, KILL, HUP, INT)\n" +
+        "  -p, --pid <PID>        Target PID for signal dispatch\n" +
+        "      --mcp              Start Model Context Protocol stdio server\n" +
+        "  -h, --help             Display this help message and exit\n" +
+        "  -v, --version          Print version information and exit\n";
+}
+
+fn parse_signum(sig_name: String) -> Int {
+    if sig_name == "KILL" || sig_name == "9" { return 9; }
+    if sig_name == "HUP" || sig_name == "1" { return 1; }
+    if sig_name == "INT" || sig_name == "2" { return 2; }
+    if sig_name == "TERM" || sig_name == "15" { return 15; }
+    if sig_name == "QUIT" || sig_name == "3" { return 3; }
+    return 15;
+}
+
+pub fn main(
+    fs: &FsReadCap,
+    proc_cap: &ProcessCap,
+    env: &EnvCap,
+    args: List[String]
+) -> Result[Int, String] {
+    let opts: PsOpts = parse_ps_args(args);
+
+    if opts.help_mode {
+        print(render_help());
+        return Ok(0);
+    }
+    if opts.version_mode {
+        println("oops 0.1.0 (openOODA sovereign process manager)");
+        return Ok(0);
+    }
+    if opts.mcp_mode {
+        run_mcp_server(fs, proc_cap);
+        return Ok(0);
+    }
+
+    if opts.signal_name != "" && opts.target_pid > 0 {
+        let signum: Int = parse_signum(opts.signal_name);
+        let r: Result[String, String] = signal_send(proc_cap, opts.target_pid, signum);
+        if r.is_ok() {
+            println("oops: sent signal " + to_string(signum) + " to PID " + to_string(opts.target_pid));
+            return Ok(0);
+        }
+        println("oops: failed to send signal " + to_string(signum) + " to PID " + to_string(opts.target_pid));
+        process_exit(1);
+        return Ok(1);
+    }
+
+    let all_procs: List[ProcessInfo] = scan_all_processes(fs);
+    let mut procs: List[ProcessInfo] = all_procs;
+    if opts.slice_filter != "" {
+        procs = filter_by_slice(procs, opts.slice_filter);
+    }
+    if opts.name_filter != "" {
+        procs = find_by_name(procs, opts.name_filter);
+    }
+
+    let esc: String = ansi_esc();
+    let reset: String = term_reset();
+    println(esc + "[1;37m    PID S SLICE    COMMAND" + reset);
+
+    if !opts.tree_mode {
+        let n: Int = list_len(procs);
+        let mut i: Int = 0;
+        while i < n {
+            let p: ProcessInfo = list_get(procs, i);
+            println(render_process_row(p, ""));
+            i = i + 1;
+        }
+        return Ok(0);
+    }
+
+    let roots: List[ProcessInfo] = get_roots(procs);
+    let n_roots: Int = list_len(roots);
+    let mut r_idx: Int = 0;
+    while r_idx < n_roots {
+        let root: ProcessInfo = list_get(roots, r_idx);
+        println(render_process_row(root, ""));
+
+        let children: List[ProcessInfo] = get_children(procs, root.pid);
+        let n_ch: Int = list_len(children);
+        let mut c_idx: Int = 0;
+        while c_idx < n_ch {
+            let ch: ProcessInfo = list_get(children, c_idx);
+            let branch: String = if c_idx == n_ch - 1 { "└── " } else { "├── " };
+            let sub_indent: String = if c_idx == n_ch - 1 { "    " } else { "│   " };
+            println(render_process_row(ch, branch));
+
+            let grand_children: List[ProcessInfo] = get_children(procs, ch.pid);
+            let n_gch: Int = list_len(grand_children);
+            let mut g_idx: Int = 0;
+            while g_idx < n_gch {
+                let gch: ProcessInfo = list_get(grand_children, g_idx);
+                let gbranch: String = if g_idx == n_gch - 1 { sub_indent + "└── " } else { sub_indent + "├── " };
+                println(render_process_row(gch, gbranch));
+                g_idx = g_idx + 1;
+            }
+            c_idx = c_idx + 1;
+        }
+        r_idx = r_idx + 1;
+    }
+
+    return Ok(0);
+}

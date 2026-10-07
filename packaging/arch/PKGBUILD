@@ -1,0 +1,21 @@
+# Maintainer: openOODA-tools <ops@openooda.org>
+pkgname=oops-bin
+_pkgname=oops
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Process tree visualizer and signal controller with systemd slice grouping and MCP surface"
+arch=('x86_64')
+url="https://github.com/openOODA-tools/oops"
+license=('Apache-2.0')
+depends=('glibc')
+provides=('oops')
+conflicts=('oops')
+source_x86_64=("${url}/releases/download/v${pkgver}/oops-linux-x86_64"
+               "uninstall.sh::https://raw.githubusercontent.com/openOODA-tools/${_pkgname}/v${pkgver}/uninstall.sh")
+sha256sums_x86_64=('SKIP'
+                   'SKIP')
+
+package() {
+    install -Dm755 "${srcdir}/oops-linux-x86_64" "${pkgdir}/usr/bin/oops"
+    install -Dm755 uninstall.sh "${pkgdir}/usr/bin/oops-uninstall"
+}
