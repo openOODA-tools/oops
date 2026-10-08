@@ -7,35 +7,40 @@
 // Beats:
 //   1. Handle --help, --version, and --mcp early without side effects.
 //   2. Dispatch signal operations (-k <SIG> -p <PID>) under ProcessCap.
-//   3. Scan /proc virtual filesystem and filter by systemd slice or name.
-//   4. Render hierarchical process tree with oote ANSI color palette.
+//   3. Scan /proc virtual filesystem and filter by systemd slice, name, or PID.
+//   4. Render hierarchical process tree with oote ANSI color palette or ASCII connectors.
 
 import "proc/anchor.oo";
 import "render/anchor.oo";
 import "ipc/anchor.oo";
 import "std/fs/process/signal.oo";
+import "std/fs/process/env.oo";
 
 fn render_help() -> String {
     return "Usage: oops [OPTIONS] [FILTER]\n\n" +
         "Sovereign process tree visualizer and signal controller with systemd slice grouping.\n\n" +
         "Options:\n" +
         "  -t, --tree             Display processes in a hierarchical tree (default)\n" +
-        "      --flat             Display processes in flat listing\n" +
-        "  -s, --slice <name>     Filter processes by systemd slice (e.g. system, user, kernel)\n" +
+        "  -l, --list, --flat     Display processes in flat listing\n" +
+        "  -s, --slice <NAME>     Filter processes by systemd slice (e.g. system, user, kernel)\n" +
+        "  -p, --pid <PID>        Target PID for subtree display or signal dispatch\n" +
         "  -k, --kill <SIG>       Send signal to target process (TERM, KILL, HUP, INT)\n" +
-        "  -p, --pid <PID>        Target PID for signal dispatch\n" +
+        "      --ascii            Use ASCII connectors instead of Unicode for tree branches\n" +
+        "      --no-color         Disable ANSI color output\n" +
+        "  -theme, --theme <NAME> Override active color palette\n" +
         "      --mcp              Start Model Context Protocol stdio server\n" +
         "  -h, --help             Display this help message and exit\n" +
         "  -v, --version          Print version information and exit\n";
 }
 
-fn parse_signum(sig_name: String) -> Int {
-    if sig_name == "KILL" || sig_name == "9" { return 9; }
-    if sig_name == "HUP" || sig_name == "1" { return 1; }
-    if sig_name == "INT" || sig_name == "2" { return 2; }
-    if sig_name == "TERM" || sig_name == "15" { return 15; }
-    if sig_name == "QUIT" || sig_name == "3" { return 3; }
-    return 15;
+fn resolve_no_color(opts: PsOpts, env: &EnvCap) -> Bool {
+    if opts.no_color { return true; }
+    let r: Result[String, String] = env_get(env, "NO_COLOR");
+    if r.is_ok() {
+        let v: String = match r { Ok(s) => s, Err(_) => "" };
+        if chars_len(v) > 0 { return true; }
+    }
+    return false;
 }
 
 pub fn main(
@@ -51,7 +56,7 @@ pub fn main(
         return Ok(0);
     }
     if opts.version_mode {
-        println("oops 0.1.0 (openOODA sovereign process manager)");
+        println("oops 0.2.0 (openOODA sovereign process manager)");
         return Ok(0);
     }
     if opts.mcp_mode {
@@ -59,8 +64,13 @@ pub fn main(
         return Ok(0);
     }
 
-    if opts.signal_name != "" && opts.target_pid > 0 {
+    if chars_len(opts.signal_name) > 0 && opts.target_pid > 0 {
         let signum: Int = parse_signum(opts.signal_name);
+        if signum <= 0 {
+            println("oops: invalid signal: " + opts.signal_name);
+            process_exit(1);
+            return Ok(1);
+        }
         let r: Result[String, String] = signal_send(proc_cap, opts.target_pid, signum);
         if r.is_ok() {
             println("oops: sent signal " + to_string(signum) + " to PID " + to_string(opts.target_pid));
@@ -71,53 +81,104 @@ pub fn main(
         return Ok(1);
     }
 
+    let no_color: Bool = resolve_no_color(opts, env);
     let all_procs: List[ProcessInfo] = scan_all_processes(fs);
     let mut procs: List[ProcessInfo] = all_procs;
-    if opts.slice_filter != "" {
+    if chars_len(opts.slice_filter) > 0 {
         procs = filter_by_slice(procs, opts.slice_filter);
     }
-    if opts.name_filter != "" {
+    if chars_len(opts.name_filter) > 0 {
         procs = find_by_name(procs, opts.name_filter);
     }
 
-    let esc: String = ansi_esc();
-    let reset: String = term_reset();
-    println(esc + "[1;37m    PID S SLICE    COMMAND" + reset);
+    if !no_color {
+        let esc: String = ansi_esc();
+        let reset: String = term_reset();
+        println(esc + "[1;37m    PID S SLICE    COMMAND" + reset);
+    } else {
+        println("    PID S SLICE    COMMAND");
+    }
 
     if !opts.tree_mode {
+        if opts.pid_filter > 0 {
+            procs = filter_by_pid(procs, opts.pid_filter);
+        }
         let n: Int = list_len(procs);
         let mut i: Int = 0;
         while i < n {
             let p: ProcessInfo = list_get(procs, i);
-            println(render_process_row(p, ""));
+            println(render_process_row(p, "", no_color));
             i = i + 1;
         }
         return Ok(0);
     }
 
-    let roots: List[ProcessInfo] = get_roots(procs);
+    let mut roots: List[ProcessInfo] = list_new();
+    if opts.pid_filter > 0 {
+        let find_r: Result[ProcessInfo, String] = find_process_by_pid(procs, opts.pid_filter);
+        if find_r.is_ok() {
+            roots = list_push(roots, match find_r { Ok(p) => p, Err(_) => process_info_default() });
+        }
+    } else {
+        roots = get_roots(procs);
+    }
+
     let n_roots: Int = list_len(roots);
     let mut r_idx: Int = 0;
     while r_idx < n_roots {
         let root: ProcessInfo = list_get(roots, r_idx);
-        println(render_process_row(root, ""));
+        println(render_process_row(root, "", no_color));
 
         let children: List[ProcessInfo] = get_children(procs, root.pid);
         let n_ch: Int = list_len(children);
         let mut c_idx: Int = 0;
         while c_idx < n_ch {
             let ch: ProcessInfo = list_get(children, c_idx);
-            let branch: String = if c_idx == n_ch - 1 { "└── " } else { "├── " };
-            let sub_indent: String = if c_idx == n_ch - 1 { "    " } else { "│   " };
-            println(render_process_row(ch, branch));
+            let is_last_c: Bool = (c_idx == n_ch - 1);
+            let branch: String = if opts.ascii_mode {
+                if is_last_c { "\\-- " } else { "|-- " }
+            } else {
+                if is_last_c { "└── " } else { "├── " }
+            };
+            let sub_indent: String = if opts.ascii_mode {
+                if is_last_c { "    " } else { "|   " }
+            } else {
+                if is_last_c { "    " } else { "│   " }
+            };
+            println(render_process_row(ch, branch, no_color));
 
             let grand_children: List[ProcessInfo] = get_children(procs, ch.pid);
             let n_gch: Int = list_len(grand_children);
             let mut g_idx: Int = 0;
             while g_idx < n_gch {
                 let gch: ProcessInfo = list_get(grand_children, g_idx);
-                let gbranch: String = if g_idx == n_gch - 1 { sub_indent + "└── " } else { sub_indent + "├── " };
-                println(render_process_row(gch, gbranch));
+                let is_last_g: Bool = (g_idx == n_gch - 1);
+                let gbranch: String = if opts.ascii_mode {
+                    if is_last_g { sub_indent + "\\-- " } else { sub_indent + "|-- " }
+                } else {
+                    if is_last_g { sub_indent + "└── " } else { sub_indent + "├── " }
+                };
+                let sub2_indent: String = sub_indent + (if opts.ascii_mode {
+                    if is_last_g { "    " } else { "|   " }
+                } else {
+                    if is_last_g { "    " } else { "│   " }
+                });
+                println(render_process_row(gch, gbranch, no_color));
+
+                let gg_children: List[ProcessInfo] = get_children(procs, gch.pid);
+                let n_ggch: Int = list_len(gg_children);
+                let mut gg_idx: Int = 0;
+                while gg_idx < n_ggch {
+                    let ggch: ProcessInfo = list_get(gg_children, gg_idx);
+                    let is_last_gg: Bool = (gg_idx == n_ggch - 1);
+                    let ggbranch: String = if opts.ascii_mode {
+                        if is_last_gg { sub2_indent + "\\-- " } else { sub2_indent + "|-- " }
+                    } else {
+                        if is_last_gg { sub2_indent + "└── " } else { sub2_indent + "├── " }
+                    };
+                    println(render_process_row(ggch, ggbranch, no_color));
+                    gg_idx = gg_idx + 1;
+                }
                 g_idx = g_idx + 1;
             }
             c_idx = c_idx + 1;

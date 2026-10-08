@@ -1,0 +1,218 @@
+// # MCP Tool Dispatcher - Process Visualization and Signal Control
+//
+// Logline: Dispatches Model Context Protocol tool requests for process trees, details, and signals.
+//
+// Setup: Demands &FsReadCap and &ProcessCap. Zero ambient authority.
+//
+// Beats:
+//   1. Construct JSON-RPC result and error response envelopes.
+//   2. Define JSON Schema catalogue for 4 process tools.
+//   3. Dispatch tools/call invocations with PID validation and signal dispatch.
+
+import "std/fs/process/signal.oo";
+import "proc/proc_info.oo";
+import "proc/proc_scan.oo";
+import "proc/proc_tree.oo";
+import "json_field.oo";
+
+pub fn build_error(id: String, code: Int, msg: String) -> String {
+    let safe_id: String = if chars_len(id) == 0 { "null" } else { id };
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + safe_id + ",\"error\":{\"code\":" + to_string(code) + ",\"message\":\"" + json_escape(msg) + "\"}}";
+}
+
+pub fn build_tool_result(id: String, text: String) -> String {
+    let safe_id: String = if chars_len(id) == 0 { "null" } else { id };
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + safe_id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + json_escape(text) + "\"}]}}";
+}
+
+pub fn tools_list_payload(id: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"tools\":["
+        + "{\"name\":\"process_tree\",\"description\":\"Return full process tree or table with systemd slice classification\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"slice\":{\"type\":\"string\",\"description\":\"Filter by systemd slice\"},\"format\":{\"type\":\"string\",\"enum\":[\"tree\",\"table\",\"json\"],\"description\":\"Output format (default: tree)\"}}}}"
+        + ","
+        + "{\"name\":\"find_process\",\"description\":\"Find active processes by name or command pattern\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"Process name or substring to search\"}},\"required\":[\"name\"]}}"
+        + ","
+        + "{\"name\":\"process_details\",\"description\":\"Return exact details for target PID including cgroup path and command line\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"pid\":{\"type\":\"integer\",\"description\":\"Target process ID\"}},\"required\":[\"pid\"]}}"
+        + ","
+        + "{\"name\":\"send_signal\",\"description\":\"Send POSIX signal to target PID\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"pid\":{\"type\":\"integer\",\"description\":\"Target process ID\"},\"signal\":{\"type\":\"string\",\"description\":\"Signal name or number (HUP, INT, KILL, TERM, 9, 15)\"}},\"required\":[\"pid\",\"signal\"]}}"
+        + "]}}";
+}
+
+pub fn is_pure_positive_int(s: String) -> Bool {
+    let t: String = str_trim(s);
+    let n: Int = chars_len(t);
+    if n == 0 { return false; }
+    let clean: String = if char_at(t, 0) == "\"" && char_at(t, n - 1) == "\"" && n > 2 {
+        str_slice(t, 1, n - 1)
+    } else {
+        t
+    };
+    let cn: Int = chars_len(clean);
+    if cn == 0 { return false; }
+    let mut i: Int = 0;
+    while i < cn {
+        let c: String = char_at(clean, i);
+        if c != "0" && c != "1" && c != "2" && c != "3" && c != "4" &&
+           c != "5" && c != "6" && c != "7" && c != "8" && c != "9" {
+            return false;
+        }
+        i = i + 1;
+    }
+    let v: Int = parse_int_field(clean);
+    return v > 0;
+}
+
+pub fn parse_signum(s: String) -> Int {
+    let trimmed: String = str_trim(s);
+    if trimmed == "HUP" || trimmed == "SIGHUP" || trimmed == "1" { return 1; }
+    if trimmed == "INT" || trimmed == "SIGINT" || trimmed == "2" { return 2; }
+    if trimmed == "QUIT" || trimmed == "SIGQUIT" || trimmed == "3" { return 3; }
+    if trimmed == "KILL" || trimmed == "SIGKILL" || trimmed == "9" { return 9; }
+    if trimmed == "USR1" || trimmed == "SIGUSR1" || trimmed == "10" { return 10; }
+    if trimmed == "USR2" || trimmed == "SIGUSR2" || trimmed == "12" { return 12; }
+    if trimmed == "TERM" || trimmed == "SIGTERM" || trimmed == "15" { return 15; }
+    if trimmed == "CONT" || trimmed == "SIGCONT" || trimmed == "18" { return 18; }
+    if trimmed == "STOP" || trimmed == "SIGSTOP" || trimmed == "19" { return 19; }
+    if trimmed == "WINCH" || trimmed == "SIGWINCH" || trimmed == "28" { return 28; }
+    if is_pure_positive_int(trimmed) {
+        let n: Int = parse_int_field(trimmed);
+        if n >= 1 && n <= 64 { return n; }
+    }
+    return -1;
+}
+
+pub fn proc_to_json(p: ProcessInfo) -> String {
+    return "{\"pid\":" + to_string(p.pid)
+        + ",\"ppid\":" + to_string(p.ppid)
+        + ",\"comm\":\"" + json_escape(p.comm) + "\""
+        + ",\"state\":\"" + json_escape(p.state) + "\""
+        + ",\"slice\":\"" + json_escape(p.slice) + "\""
+        + ",\"rss_kb\":" + to_string(p.rss_kb) + "}";
+}
+
+pub fn details_to_json(d: ProcessDetails) -> String {
+    return "{\n  \"pid\": " + to_string(d.pid)
+        + ",\n  \"ppid\": " + to_string(d.ppid)
+        + ",\n  \"comm\": \"" + json_escape(d.comm) + "\""
+        + ",\n  \"state\": \"" + json_escape(d.state) + "\""
+        + ",\n  \"slice\": \"" + json_escape(d.slice) + "\""
+        + ",\n  \"rss_kb\": " + to_string(d.rss_kb)
+        + ",\n  \"threads\": " + to_string(d.threads)
+        + ",\n  \"cgroup_path\": \"" + json_escape(d.cgroup_path) + "\""
+        + ",\n  \"cmdline\": \"" + json_escape(d.cmdline) + "\"\n}\n";
+}
+
+pub fn render_procs_json_list(procs: List[ProcessInfo]) -> String {
+    let mut out: String = "[\n";
+    let n: Int = list_len(procs);
+    let mut i: Int = 0;
+    while i < n {
+        let p: ProcessInfo = list_get(procs, i);
+        out = out + "  " + proc_to_json(p);
+        if i + 1 < n { out = out + ","; }
+        out = out + "\n";
+        i = i + 1;
+    }
+    out = out + "]\n";
+    return out;
+}
+
+pub fn handle_tool_call(fs: &FsReadCap, proc_cap: &ProcessCap, id: String, req: String) -> String {
+    let params: String = json_field_raw(req, "params");
+    let tool_name: String = json_field_string(params, "name");
+    let args: String = json_field_raw(params, "arguments");
+
+    if chars_len(tool_name) == 0 {
+        return build_error(id, -32602, "missing required parameter: name");
+    }
+
+    if tool_name == "process_tree" {
+        let fmt_arg: String = json_field_string(args, "format");
+        let fmt: String = if chars_len(fmt_arg) == 0 { "tree" } else { fmt_arg };
+        if fmt != "tree" && fmt != "table" && fmt != "json" {
+            return build_error(id, -32602, "invalid format, must be one of: tree, table, json");
+        }
+        let all_procs: List[ProcessInfo] = scan_all_processes(fs);
+        let slice_arg: String = json_field_string(args, "slice");
+        let procs: List[ProcessInfo] = if chars_len(slice_arg) > 0 {
+            filter_by_slice(all_procs, slice_arg)
+        } else {
+            all_procs
+        };
+
+        if fmt == "json" {
+            return build_tool_result(id, render_procs_json_list(procs));
+        }
+        if fmt == "table" {
+            return build_tool_result(id, render_tree_table(procs));
+        }
+        return build_tool_result(id, render_tree_hierarchy(procs, false));
+    }
+
+    if tool_name == "find_process" {
+        let raw_name: String = json_field_raw(args, "name");
+        if chars_len(raw_name) == 0 {
+            return build_error(id, -32602, "missing required parameter: name");
+        }
+        let name: String = json_field_string(args, "name");
+        let all_procs: List[ProcessInfo] = scan_all_processes(fs);
+        let matches: List[ProcessInfo] = find_by_name(all_procs, name);
+        return build_tool_result(id, render_procs_json_list(matches));
+    }
+
+    if tool_name == "process_details" {
+        let raw_pid: String = json_field_raw(args, "pid");
+        if chars_len(raw_pid) == 0 {
+            return build_error(id, -32602, "missing required parameter: pid");
+        }
+        if !is_pure_positive_int(raw_pid) {
+            return build_error(id, -32602, "invalid pid: must be positive integer");
+        }
+        let pid_val: Int = parse_int_field(raw_pid);
+        let r: Result[ProcessDetails, String] = read_process_details(fs, pid_val);
+        if r.is_err() {
+            return build_error(id, -32602, "process not found: " + to_string(pid_val));
+        }
+        let d: ProcessDetails = match r { Ok(v) => v, Err(_) => process_details_default() };
+        return build_tool_result(id, details_to_json(d));
+    }
+
+    if tool_name == "send_signal" {
+        let raw_pid: String = json_field_raw(args, "pid");
+        if chars_len(raw_pid) == 0 {
+            return build_error(id, -32602, "missing required parameter: pid");
+        }
+        if !is_pure_positive_int(raw_pid) {
+            return build_error(id, -32602, "invalid pid: must be positive integer");
+        }
+        let pid_val: Int = parse_int_field(raw_pid);
+        let raw_sig: String = json_field_string(args, "signal");
+        if chars_len(raw_sig) == 0 {
+            return build_error(id, -32602, "missing required parameter: signal");
+        }
+        let signum: Int = parse_signum(raw_sig);
+        if signum <= 0 {
+            return build_error(id, -32602, "invalid signal: " + raw_sig);
+        }
+        let r: Result[String, String] = signal_send(proc_cap, pid_val, signum);
+        if r.is_ok() {
+            return build_tool_result(id, "{\"pid\":" + to_string(pid_val) + ",\"signum\":" + to_string(signum) + ",\"status\":\"sent\"}");
+        }
+        return build_error(id, -32000, "signal dispatch failed");
+    }
+
+    return build_error(id, -32601, "unknown tool: " + tool_name);
+}
+
+fn process_details_default() -> ProcessDetails {
+    return ProcessDetails {
+        pid: 0,
+        ppid: 0,
+        comm: "",
+        state: "?",
+        slice: "unknown",
+        rss_kb: 0,
+        threads: 1,
+        cgroup_path: "",
+        cmdline: ""
+    };
+}

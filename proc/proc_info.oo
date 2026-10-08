@@ -1,14 +1,14 @@
 // # Process Information Model and /proc Decoders
 //
-// Logline: Decodes Linux /proc stat, comm, and cgroup records into structured ProcessInfo.
+// Logline: Decodes Linux /proc stat, comm, statm, and cgroup records into structured ProcessInfo.
 //
 // Setup: Requires FsReadCap to inspect process virtual filesystem entries. Zero ambient authority.
 //
 // Beats:
-//   1. Define ProcessInfo record holding pid, ppid, comm, state, slice, and thread count.
-//   2. Parse /proc/<pid>/stat extracting comm, execution state, and parent process ID.
+//   1. Define ProcessInfo and ProcessDetails models with RSS, slice, threads, and cmdline.
+//   2. Parse /proc/<pid>/stat extracting comm, execution state, ppid, and thread count.
 //   3. Classify systemd cgroup slices (system.slice, user.slice, init.scope, kernel).
-//   4. Construct validated ProcessInfo models for discovered tasks.
+//   4. Construct validated ProcessInfo and ProcessDetails models for discovered tasks.
 
 pub type ProcessInfo = struct {
     pid: Int,
@@ -16,7 +16,20 @@ pub type ProcessInfo = struct {
     comm: String,
     state: String,
     slice: String,
-    threads: Int
+    threads: Int,
+    rss_kb: Int
+};
+
+pub type ProcessDetails = struct {
+    pid: Int,
+    ppid: Int,
+    comm: String,
+    state: String,
+    slice: String,
+    rss_kb: Int,
+    threads: Int,
+    cgroup_path: String,
+    cmdline: String
 };
 
 pub fn process_info_default() -> ProcessInfo {
@@ -26,24 +39,49 @@ pub fn process_info_default() -> ProcessInfo {
         comm: "",
         state: "?",
         slice: "unknown",
-        threads: 1
+        threads: 1,
+        rss_kb: 0
+    };
+}
+
+pub fn process_details_default() -> ProcessDetails {
+    return ProcessDetails {
+        pid: 0,
+        ppid: 0,
+        comm: "",
+        state: "?",
+        slice: "unknown",
+        rss_kb: 0,
+        threads: 1,
+        cgroup_path: "",
+        cmdline: ""
     };
 }
 
 pub fn parse_slice_from_cgroup(cgroup_content: String) -> String {
-    if str_contains(cgroup_content, "/system.slice") {
-        return "system.slice";
-    }
-    if str_contains(cgroup_content, "/user.slice") {
-        return "user.slice";
-    }
-    if str_contains(cgroup_content, "/init.scope") {
-        return "init.scope";
-    }
-    if str_contains(cgroup_content, "machine.slice") {
-        return "machine.slice";
-    }
+    if str_contains(cgroup_content, "/system.slice") { return "system.slice"; }
+    if str_contains(cgroup_content, "/user.slice") { return "user.slice"; }
+    if str_contains(cgroup_content, "/init.scope") { return "init.scope"; }
+    if str_contains(cgroup_content, "machine.slice") { return "machine.slice"; }
     return "other";
+}
+
+pub fn extract_cgroup_path(cgroup_content: String) -> String {
+    let n: Int = chars_len(cgroup_content);
+    if n == 0 { return ""; }
+    let nl: Int = str_index_of(cgroup_content, "\n");
+    let line: String = if nl >= 0 { str_slice(cgroup_content, 0, nl) } else { cgroup_content };
+    let trimmed: String = str_trim(line);
+    let tn: Int = chars_len(trimmed);
+    let dcolon: Int = str_index_of(trimmed, "::");
+    if dcolon >= 0 && dcolon + 2 <= tn {
+        return str_slice(trimmed, dcolon + 2, tn);
+    }
+    let colon: Int = find_last_char(trimmed, ":");
+    if colon >= 0 && colon + 1 <= tn {
+        return str_slice(trimmed, colon + 1, tn);
+    }
+    return trimmed;
 }
 
 pub fn parse_int_field(s: String) -> Int {
@@ -75,34 +113,74 @@ pub fn find_last_char(s: String, target: String) -> Int {
     return -1;
 }
 
-pub fn read_process_info(fs: &FsReadCap, pid_str: String) -> Result[ProcessInfo, String] {
-    let pid_val: Int = parse_int_field(pid_str);
-    if pid_val <= 0 {
-        return Err("INVALID_PID");
-    }
+pub fn parse_statm_rss_kb(content: String) -> Int {
+    let n: Int = chars_len(content);
+    let mut i: Int = 0;
+    while i < n && (char_at(content, i) == " " || char_at(content, i) == "\t") { i = i + 1; }
+    while i < n && char_at(content, i) != " " && char_at(content, i) != "\t" && char_at(content, i) != "\n" { i = i + 1; }
+    while i < n && (char_at(content, i) == " " || char_at(content, i) == "\t") { i = i + 1; }
+    let start: Int = i;
+    while i < n && char_at(content, i) != " " && char_at(content, i) != "\t" && char_at(content, i) != "\n" { i = i + 1; }
+    if start >= i { return 0; }
+    let pages: Int = parse_int_field(str_slice(content, start, i));
+    return pages * 4;
+}
 
+pub fn clean_cmdline(raw: String) -> String {
+    let n: Int = chars_len(raw);
+    let mut out: String = "";
+    let mut i: Int = 0;
+    while i < n {
+        let b: Int = byte_at(raw, i);
+        if b == 0 {
+            out = out + " ";
+        } else {
+            out = out + char_at(raw, i);
+        }
+        i = i + 1;
+    }
+    return str_trim(out);
+}
+
+pub fn split_stat_words(line: String) -> List[String] {
+    let mut words: List[String] = list_new();
+    let n: Int = chars_len(line);
+    let mut cur: String = "";
+    let mut i: Int = 0;
+    while i < n {
+        let c: String = char_at(line, i);
+        if c == " " || c == "\t" {
+            if chars_len(cur) > 0 {
+                words = list_push(words, cur);
+                cur = "";
+                if list_len(words) > 22 { return words; }
+            }
+        } else {
+            cur = cur + c;
+        }
+        i = i + 1;
+    }
+    if chars_len(cur) > 0 { words = list_push(words, cur); }
+    return words;
+}
+
+pub fn read_process_details(fs: &FsReadCap, pid_val: Int) -> Result[ProcessDetails, String] {
+    if pid_val <= 0 { return Err("INVALID_PID"); }
+    let pid_str: String = to_string(pid_val);
     let stat_path: String = "/proc/" + pid_str + "/stat";
     let stat_res: Result[String, String] = read_file(fs, stat_path);
-    if stat_res.is_err() {
-        return Err("STAT_UNREADABLE");
-    }
+    if stat_res.is_err() { return Err("NOT_FOUND"); }
     let stat: String = match stat_res { Ok(s) => s, Err(_) => "" };
 
     let open_paren: Int = str_index_of(stat, "(");
     let close_paren: Int = find_last_char(stat, ")");
-
-    if open_paren < 0 || close_paren <= open_paren {
-        return Err("MALFORMED_STAT");
-    }
+    if open_paren < 0 || close_paren <= open_paren { return Err("MALFORMED_STAT"); }
 
     let mut comm: String = str_slice(stat, open_paren + 1, close_paren);
-    let comm_path: String = "/proc/" + pid_str + "/comm";
-    let cr: Result[String, String] = read_file(fs, comm_path);
+    let cr: Result[String, String] = read_file(fs, "/proc/" + pid_str + "/comm");
     if cr.is_ok() {
         let direct_comm: String = str_trim(match cr { Ok(c) => c, Err(_) => "" });
-        if chars_len(direct_comm) > 0 {
-            comm = direct_comm;
-        }
+        if chars_len(direct_comm) > 0 { comm = direct_comm; }
     }
 
     let rest: String = str_trim(str_slice(stat, close_paren + 1, chars_len(stat)));
@@ -113,20 +191,53 @@ pub fn read_process_info(fs: &FsReadCap, pid_str: String) -> Result[ProcessInfo,
     let ppid_str: String = if ppid_sp > 0 { str_slice(after_state, 0, ppid_sp) } else { after_state };
     let ppid_val: Int = parse_int_field(ppid_str);
 
-    let cgroup_path: String = "/proc/" + pid_str + "/cgroup";
-    let cgroup_res: Result[String, String] = read_file(fs, cgroup_path);
-    let cgroup_content: String = match cgroup_res { Ok(cg) => cg, Err(_) => "" };
-    let mut slice_val: String = parse_slice_from_cgroup(cgroup_content);
-    if ppid_val == 2 || pid_val == 2 {
-        slice_val = "kernel";
+    let mut threads_val: Int = 1;
+    let stat_words: List[String] = split_stat_words(rest);
+    if list_len(stat_words) > 17 {
+        let th: Int = parse_int_field(list_get(stat_words, 17));
+        if th > 0 { threads_val = th; }
     }
 
-    return Ok(ProcessInfo {
+    let cgroup_res: Result[String, String] = read_file(fs, "/proc/" + pid_str + "/cgroup");
+    let cgroup_content: String = match cgroup_res { Ok(cg) => cg, Err(_) => "" };
+    let mut slice_val: String = parse_slice_from_cgroup(cgroup_content);
+    if ppid_val == 2 || pid_val == 2 { slice_val = "kernel"; }
+    let cg_path: String = extract_cgroup_path(cgroup_content);
+
+    let statm_res: Result[String, String] = read_file(fs, "/proc/" + pid_str + "/statm");
+    let statm_content: String = match statm_res { Ok(sm) => sm, Err(_) => "" };
+    let rss_val: Int = parse_statm_rss_kb(statm_content);
+
+    let cmd_res: Result[String, String] = read_file(fs, "/proc/" + pid_str + "/cmdline");
+    let cmd_raw: String = match cmd_res { Ok(c) => c, Err(_) => "" };
+    let cmdline: String = clean_cmdline(cmd_raw);
+
+    return Ok(ProcessDetails {
         pid: pid_val,
         ppid: ppid_val,
         comm: comm,
         state: state_ch,
         slice: slice_val,
-        threads: 1
+        rss_kb: rss_val,
+        threads: threads_val,
+        cgroup_path: cg_path,
+        cmdline: cmdline
+    });
+}
+
+pub fn read_process_info(fs: &FsReadCap, pid_str: String) -> Result[ProcessInfo, String] {
+    let pid_val: Int = parse_int_field(pid_str);
+    if pid_val <= 0 { return Err("INVALID_PID"); }
+    let r: Result[ProcessDetails, String] = read_process_details(fs, pid_val);
+    if r.is_err() { return Err(match r { Ok(_) => "", Err(e) => e }); }
+    let d: ProcessDetails = match r { Ok(v) => v, Err(_) => process_details_default() };
+    return Ok(ProcessInfo {
+        pid: d.pid,
+        ppid: d.ppid,
+        comm: d.comm,
+        state: d.state,
+        slice: d.slice,
+        threads: d.threads,
+        rss_kb: d.rss_kb
     });
 }

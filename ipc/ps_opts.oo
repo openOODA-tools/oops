@@ -13,8 +13,12 @@ pub type PsOpts = struct {
     tree_mode: Bool,
     slice_filter: String,
     name_filter: String,
+    pid_filter: Int,
     signal_name: String,
     target_pid: Int,
+    ascii_mode: Bool,
+    no_color: Bool,
+    theme_name: String,
     mcp_mode: Bool,
     help_mode: Bool,
     version_mode: Bool,
@@ -26,8 +30,12 @@ pub fn ps_opts_default() -> PsOpts {
         tree_mode: true,
         slice_filter: "",
         name_filter: "",
+        pid_filter: 0,
         signal_name: "",
         target_pid: 0,
+        ascii_mode: false,
+        no_color: false,
+        theme_name: "",
         mcp_mode: false,
         help_mode: false,
         version_mode: false,
@@ -58,6 +66,7 @@ pub fn parse_ps_args(args: List[String]) -> PsOpts {
     let mut i: Int = 0;
     while i < n {
         let arg: String = list_get(args, i);
+        let arg_len: Int = chars_len(arg);
         if arg == "-h" || arg == "--help" {
             opts.help_mode = true;
             return opts;
@@ -68,24 +77,64 @@ pub fn parse_ps_args(args: List[String]) -> PsOpts {
             opts.mcp_mode = true;
         } else if arg == "-t" || arg == "--tree" {
             opts.tree_mode = true;
-        } else if arg == "--flat" {
+        } else if arg == "-l" || arg == "--list" || arg == "--flat" {
             opts.tree_mode = false;
+        } else if arg == "--ascii" {
+            opts.ascii_mode = true;
+        } else if arg == "--no-color" {
+            opts.no_color = true;
         } else if arg == "-s" || arg == "--slice" {
-            i = i + 1;
-            if i < n { opts.slice_filter = list_get(args, i); }
+            if i + 1 < n {
+                opts.slice_filter = list_get(args, i + 1);
+                i = i + 1;
+            }
         } else if str_starts_with(arg, "--slice=") {
-            opts.slice_filter = str_slice(arg, 8, chars_len(arg));
-        } else if arg == "-k" || arg == "--kill" || arg == "--signal" {
-            i = i + 1;
-            if i < n { opts.signal_name = list_get(args, i); }
-        } else if str_starts_with(arg, "-k=") || str_starts_with(arg, "--kill=") {
-            let eq: Int = str_index_of(arg, "=");
-            opts.signal_name = str_slice(arg, eq + 1, chars_len(arg));
+            opts.slice_filter = str_slice(arg, 8, arg_len);
+        } else if str_starts_with(arg, "-s=") {
+            opts.slice_filter = str_slice(arg, 3, arg_len);
+        } else if str_starts_with(arg, "-s") && arg_len > 2 {
+            opts.slice_filter = str_slice(arg, 2, arg_len);
         } else if arg == "-p" || arg == "--pid" {
-            i = i + 1;
-            if i < n { opts.target_pid = parse_ps_int(list_get(args, i)); }
+            if i + 1 < n {
+                let pval: Int = parse_ps_int(list_get(args, i + 1));
+                opts.target_pid = pval;
+                opts.pid_filter = pval;
+                i = i + 1;
+            }
         } else if str_starts_with(arg, "--pid=") {
-            opts.target_pid = parse_ps_int(str_slice(arg, 6, chars_len(arg)));
+            let pval: Int = parse_ps_int(str_slice(arg, 6, arg_len));
+            opts.target_pid = pval;
+            opts.pid_filter = pval;
+        } else if str_starts_with(arg, "-p=") {
+            let pval: Int = parse_ps_int(str_slice(arg, 3, arg_len));
+            opts.target_pid = pval;
+            opts.pid_filter = pval;
+        } else if str_starts_with(arg, "-p") && arg_len > 2 {
+            let pval: Int = parse_ps_int(str_slice(arg, 2, arg_len));
+            opts.target_pid = pval;
+            opts.pid_filter = pval;
+        } else if arg == "-k" || arg == "--kill" || arg == "--signal" {
+            if i + 1 < n {
+                opts.signal_name = list_get(args, i + 1);
+                i = i + 1;
+            }
+        } else if str_starts_with(arg, "--kill=") {
+            opts.signal_name = str_slice(arg, 7, arg_len);
+        } else if str_starts_with(arg, "--signal=") {
+            opts.signal_name = str_slice(arg, 9, arg_len);
+        } else if str_starts_with(arg, "-k=") {
+            opts.signal_name = str_slice(arg, 3, arg_len);
+        } else if str_starts_with(arg, "-k") && arg_len > 2 {
+            opts.signal_name = str_slice(arg, 2, arg_len);
+        } else if arg == "-theme" || arg == "--theme" {
+            if i + 1 < n {
+                opts.theme_name = list_get(args, i + 1);
+                i = i + 1;
+            }
+        } else if str_starts_with(arg, "--theme=") {
+            opts.theme_name = str_slice(arg, 8, arg_len);
+        } else if str_starts_with(arg, "-theme=") {
+            opts.theme_name = str_slice(arg, 7, arg_len);
         } else if !str_starts_with(arg, "-") && i > 0 {
             opts.name_filter = arg;
         }

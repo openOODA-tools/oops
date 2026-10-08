@@ -1,5 +1,11 @@
-oops (0.1.0-1) unstable; urgency=medium
+oops (0.2.0-1) stable; urgency=low
 
-  * Initial sovereign release: systemd slice grouping, tree visualization, and MCP stdio surface.
+  * S+ tier release: streaming JSON-RPC 2.0 MCP server, 4 tools, and CLI tree/list improvements.
 
- -- openOODA-tools <ops@openooda.org>  Wed, 07 Oct 2026 00:00:00 +0000
+ -- openOODA-tools <ops@openooda.org>  Wed, 07 Oct 2026 14:00:00 -1000
+
+oops (0.1.0-1) stable; urgency=low
+
+  * Initial sovereign release: systemd slice grouping, process tree, and MCP surface.
+
+ -- openOODA-tools <ops@openooda.org>  Wed, 07 Oct 2026 06:00:00 -1000

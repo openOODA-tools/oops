@@ -1,7 +1,7 @@
 # oops
 
 > **Process tree visualizer and signal controller with systemd slice grouping for the openOODA era.**  
-> *A drop-in `ps`/`pstree` alternative written in pure openOODA, featuring native systemd slice classification (`system.slice`, `user.slice`), hierarchical tree visualization, capability-gated signal dispatch (`ProcessCap`), and a first-class Model Context Protocol (MCP) surface.*
+> *A drop-in `ps`/`pstree` alternative written in pure openOODA, featuring native systemd slice classification (`system.slice`, `user.slice`), hierarchical tree visualization, capability-gated signal dispatch (`ProcessCap`), and a streaming Model Context Protocol (MCP) server.*
 
 Part of [openOODA-tools](https://github.com/openOODA-tools).
 
@@ -24,7 +24,7 @@ curl -fsSL https://openooda-tools.github.io/oops/install.sh | bash
 curl -fsSL https://openooda-tools.github.io/oops/install.sh | bash -s -- --apt
 
 # Or manual package install
-sudo dpkg -i oops_0.1.0-1_amd64.deb
+sudo dpkg -i oops_0.2.0-1_amd64.deb
 ```
 
 ### Fedora / RHEL / CentOS (DNF)
@@ -33,7 +33,7 @@ sudo dpkg -i oops_0.1.0-1_amd64.deb
 curl -fsSL https://openooda-tools.github.io/oops/install.sh | bash -s -- --dnf
 
 # Or manual RPM install
-sudo dnf install ./oops-0.1.0-1.fc44.x86_64.rpm
+sudo dnf install ./oops-0.2.0-1.*.x86_64.rpm
 ```
 
 ### Arch Linux (PKGBUILD)
@@ -67,20 +67,32 @@ curl -fsSL https://openooda-tools.github.io/oops/uninstall.sh | bash -s -- --dry
 View processes organized hierarchically with branch glyphs and systemd slice badges:
 
 ```bash
-# Render complete process tree
+# Render complete process tree (default)
 oops
 
+# Explicit tree mode
+oops -t
+
+# Render tree with ASCII connectors (|--, \--)
+oops --ascii
+
+# Flat table view
+oops -l
+
+# Target specific process subtree or PID
+oops -p 1
+
 # Filter processes belonging to systemd system slice
-oops --slice system
+oops -s system
 
 # Filter processes belonging to user sessions
-oops --slice user
+oops -s user
+
+# Suppress ANSI color output
+oops --no-color
 
 # Search processes by name
 oops sshd
-
-# Render flat listing
-oops --flat
 ```
 
 ### Signal Control
@@ -102,9 +114,10 @@ oops --mcp
 ```
 
 #### Exposed MCP Tools:
-- `process_tree`: Returns structured process table with systemd slice annotations.
-- `find_process`: Finds processes matching a given name or substring.
-- `send_signal`: Dispatches POSIX signals to a target PID under explicit capability authorization.
+- `process_tree`: Returns structured process tree or table (`format`: `tree`, `table`, `json`; optional `slice` filter).
+- `find_process`: Finds processes matching a given name or substring, including `rss_kb` memory metrics.
+- `process_details`: Returns complete metadata for a target PID (`pid`, `ppid`, `comm`, `state`, `slice`, `rss_kb`, `threads`, `cgroup_path`, `cmdline`).
+- `send_signal`: Dispatches POSIX signals to a target PID under explicit capability authorization with strict positive PID validation.
 
 ---
 

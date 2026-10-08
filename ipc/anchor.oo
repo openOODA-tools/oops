@@ -7,13 +7,14 @@
 // Beats:
 //   1. Re-export PsOpts parser and defaults.
 //   2. Re-export JSON field extraction helpers.
-//   3. Re-export MCP stdio server.
+//   3. Re-export MCP stdio server and dispatch.
 //   4. Expose subsystem anchor metadata.
 
 import "ps_opts.oo";
 import "json_field.oo";
+import "tool_dispatch.oo";
 import "mcp_serve.oo";
 
 pub fn ipc_anchor_version() -> String {
-    return "0.1.0";
+    return "0.2.0";
 }

@@ -15,5 +15,5 @@ import "proc_scan.oo";
 import "proc_tree.oo";
 
 pub fn proc_anchor_version() -> String {
-    return "0.1.0";
+    return "0.2.0";
 }

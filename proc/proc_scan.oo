@@ -8,7 +8,7 @@
 //   1. Enumerate top-level directory entries in /proc.
 //   2. Filter for purely numeric entries corresponding to active process IDs.
 //   3. Decode each task into ProcessInfo records ignoring stale or exited tasks.
-//   4. Accumulate and return the full list of discovered processes.
+//   4. Accumulate and return filtered collections of discovered processes.
 
 import "std/fs/os/fs.oo";
 import "proc_info.oo";
@@ -77,6 +77,34 @@ pub fn find_by_name(procs: List[ProcessInfo], name_query: String) -> List[Proces
     while i < n {
         let p: ProcessInfo = list_get(procs, i);
         if str_contains(p.comm, name_query) {
+            out = list_push(out, p);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+pub fn find_process_by_pid(procs: List[ProcessInfo], target_pid: Int) -> Result[ProcessInfo, String] {
+    let n: Int = list_len(procs);
+    let mut i: Int = 0;
+    while i < n {
+        let p: ProcessInfo = list_get(procs, i);
+        if p.pid == target_pid {
+            return Ok(p);
+        }
+        i = i + 1;
+    }
+    return Err("NOT_FOUND");
+}
+
+pub fn filter_by_pid(procs: List[ProcessInfo], target_pid: Int) -> List[ProcessInfo] {
+    if target_pid <= 0 { return procs; }
+    let mut out: List[ProcessInfo] = list_new();
+    let n: Int = list_len(procs);
+    let mut i: Int = 0;
+    while i < n {
+        let p: ProcessInfo = list_get(procs, i);
+        if p.pid == target_pid {
             out = list_push(out, p);
         }
         i = i + 1;

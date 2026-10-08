@@ -1,7 +1,7 @@
 # Maintainer: openOODA-tools <ops@openooda.org>
 pkgname=oops-bin
 _pkgname=oops
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Process tree visualizer and signal controller with systemd slice grouping and MCP surface"
 arch=('x86_64')

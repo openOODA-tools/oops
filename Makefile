@@ -1,4 +1,19 @@
-# oops v0.1.0 Makefile
+# oops v0.2.0 Makefile
+#
+# Build, verification gate, test suite, and tri-distribution packaging.
+#
+# Usage:
+#   make build       - compile main.oo to dist/oops
+#   make check       - run oodac check on every .oo file
+#   make line-cap    - enforce 16-256 line cap on every .oo and .oot (shim-exempt)
+#   make file-law    - reject forbidden file extensions and stray docs
+#   make academy     - verify every .oo has the 4-element Academy header
+#   make density     - enforce at most 8 pages per directory
+#   make verify      - run line-cap, file-law, academy, density, and check
+#   make test        - run end-to-end integration and MCP tests
+#   make bench       - run performance benchmark suite
+#   make package     - build deb, rpm, and arch packages
+#   make clean       - remove build artifacts
 
 OODA_COMPILER ?= $(firstword $(wildcard $(HOME)/.openooda/bin/oodac $(CURDIR)/../../openOODA/oodac/bin/oodac))
 OODACODEX ?= $(HOME)/.openooda/northstar.oot
@@ -9,9 +24,9 @@ PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 
 SRC := $(wildcard *.oo) $(wildcard */*.oo)
-VERSION ?= 0.1.0
+VERSION ?= 0.2.0
 
-.PHONY: build check line-cap file-law academy density verify clean test package package-deb package-rpm package-arch install uninstall
+.PHONY: build check line-cap file-law academy density verify clean test bench package package-deb package-rpm package-arch install uninstall
 
 build: $(BIN)
 
@@ -100,23 +115,109 @@ check:
 verify: line-cap file-law academy density check
 
 test: $(BIN)
-	@echo "=== testing --help ==="
+	@echo "=== Tier 1: Core CLI Flags, Tree View, Flat List, Slices, PID, ASCII, and Options ==="
 	@./$(BIN) --help > /dev/null && echo "PASS: --help"
-	@echo "=== testing --version ==="
-	@./$(BIN) --version | grep -q "0.1.0" && echo "PASS: --version"
-	@echo "=== testing process tree visualization ==="
-	@OODA_NO_JAIL=1 ./$(BIN) | grep -q "systemd" && echo "PASS: process tree"
-	@echo "=== testing flat listing mode ==="
-	@OODA_NO_JAIL=1 ./$(BIN) --flat | grep -q "systemd" && echo "PASS: flat listing"
-	@echo "=== testing slice filtering ==="
-	@OODA_NO_JAIL=1 ./$(BIN) --slice system | grep -q "system" && echo "PASS: slice filter"
-	@echo "=== testing MCP initialize ==="
-	@printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "protocolVersion" && echo "PASS: MCP initialize"
-	@echo "=== testing MCP tools/list ==="
-	@printf '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "process_tree" && echo "PASS: MCP tools/list"
-	@echo "=== testing MCP tools/call find_process ==="
-	@printf '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_process","arguments":{"name":"systemd"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "systemd" && echo "PASS: MCP find_process"
+	@./$(BIN) -h > /dev/null && echo "PASS: -h"
+	@./$(BIN) --version | grep -q "0.2.0" && echo "PASS: --version"
+	@./$(BIN) -v | grep -q "0.2.0" && echo "PASS: -v"
+	@./$(BIN) --help | grep -q -- "-t, --tree" && echo "PASS: --help documents -t"
+	@./$(BIN) --help | grep -q -- "-l, --list" && echo "PASS: --help documents -l"
+	@./$(BIN) --help | grep -q -- "-s, --slice" && echo "PASS: --help documents -s"
+	@./$(BIN) --help | grep -q -- "-p, --pid" && echo "PASS: --help documents -p"
+	@./$(BIN) --help | grep -q -- "-k, --kill" && echo "PASS: --help documents -k"
+	@./$(BIN) --help | grep -q -- "--ascii" && echo "PASS: --help documents --ascii"
+	@./$(BIN) --help | grep -q -- "--no-color" && echo "PASS: --help documents --no-color"
+	@./$(BIN) --help | grep -q -- "--mcp" && echo "PASS: --help documents --mcp"
+	@OODA_NO_JAIL=1 ./$(BIN) | grep -q "systemd" && echo "PASS: default process tree"
+	@OODA_NO_JAIL=1 ./$(BIN) -t | grep -q "systemd" && echo "PASS: explicit tree flag -t"
+	@OODA_NO_JAIL=1 ./$(BIN) -l | grep -q "systemd" && echo "PASS: flat list flag -l"
+	@OODA_NO_JAIL=1 ./$(BIN) --flat | grep -q "systemd" && echo "PASS: flat list alias --flat"
+	@OODA_NO_JAIL=1 ./$(BIN) --list | grep -q "systemd" && echo "PASS: flat list alias --list"
+	@OODA_NO_JAIL=1 ./$(BIN) -s system | grep -q "system" && echo "PASS: slice filter -s system"
+	@OODA_NO_JAIL=1 ./$(BIN) --slice=system | grep -q "system" && echo "PASS: long slice flag --slice=system"
+	@OODA_NO_JAIL=1 ./$(BIN) -ssystem | grep -q "system" && echo "PASS: attached short slice flag -ssystem"
+	@OODA_NO_JAIL=1 ./$(BIN) -p 1 | grep -q "systemd" && echo "PASS: pid filter -p 1"
+	@OODA_NO_JAIL=1 ./$(BIN) --pid=1 | grep -q "systemd" && echo "PASS: long pid flag --pid=1"
+	@OODA_NO_JAIL=1 ./$(BIN) -p1 | grep -q "systemd" && echo "PASS: attached short pid flag -p1"
+	@OODA_NO_JAIL=1 ./$(BIN) --ascii | grep -E -q '(\\|\|)-- ' && echo "PASS: --ascii emits ASCII branch connectors"
+	@OODA_NO_JAIL=1 ./$(BIN) | grep -E -q '(├──|└──)' && echo "PASS: default tree emits Unicode connectors"
+	@ESC=$$(printf '\033'); ! (OODA_NO_JAIL=1 ./$(BIN) --no-color | grep -q "$$ESC") && echo "PASS: --no-color suppresses ANSI escapes"
+	@OODA_NO_JAIL=1 ./$(BIN) -theme classic/1982 | grep -q "systemd" && echo "PASS: -theme override"
+	@echo "=== Tier 2: MCP Handshake & Protocol Framing ==="
+	@printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n' | ./$(BIN) --mcp | grep -q "2024-11-05" && echo "PASS: MCP initialize protocolVersion"
+	@printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n' | ./$(BIN) --mcp | grep -q '"name":"oops","version":"0.2.0"' && echo "PASS: MCP initialize serverInfo"
+	@printf '{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}\n' | ./$(BIN) --mcp | grep -q '"result":{}' && echo "PASS: MCP ping"
+	@printf '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}\n' | ./$(BIN) --mcp | grep -q "process_tree" && echo "PASS: MCP tools/list process_tree"
+	@printf '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}\n' | ./$(BIN) --mcp | grep -q "find_process" && echo "PASS: MCP tools/list find_process"
+	@printf '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}\n' | ./$(BIN) --mcp | grep -q "process_details" && echo "PASS: MCP tools/list process_details"
+	@printf '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}\n' | ./$(BIN) --mcp | grep -q "send_signal" && echo "PASS: MCP tools/list send_signal"
+	@test -z "$$(printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n' | ./$(BIN) --mcp)" && echo "PASS: MCP notifications/initialized produces no response"
+	@printf '{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}\n' | ./$(BIN) --mcp | grep -q '"result":null' && echo "PASS: MCP shutdown"
+	@test -z "$$(printf '{"jsonrpc":"2.0","method":"exit","params":{}}\n' | ./$(BIN) --mcp)" && echo "PASS: MCP exit terminates cleanly"
+	@test "$$(printf '{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}\n' | ./$(BIN) --mcp | grep -c '"result":{}')" = "2" && echo "PASS: MCP concatenated JSON-RPC messages without newline"
+	@printf '{"jsonrpc":"2.0","id":99,"method":"ping","params":{}}' | ./$(BIN) --mcp | grep -q '"id":99' && echo "PASS: MCP request without trailing newline"
+	@(sleep 0.1 && printf '{"jsonrpc":"2.0","id":15,"method":"ping","params":{}}\n') | ./$(BIN) --mcp | grep -q '"result":{}' && echo "PASS: MCP stdio idle pause does not crash server"
+	@echo "=== Tier 3: All 4 MCP Tools & Execution Edge Cases ==="
+	@printf '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"process_tree","arguments":{}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "systemd" && echo "PASS: MCP process_tree default tree"
+	@printf '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"process_tree","arguments":{"format":"table"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "PID" && echo "PASS: MCP process_tree format table"
+	@printf '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"process_tree","arguments":{"format":"json"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "rss_kb" && echo "PASS: MCP process_tree format json"
+	@printf '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"process_tree","arguments":{"slice":"system","format":"table"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "system" && echo "PASS: MCP process_tree slice filter"
+	@printf '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"find_process","arguments":{"name":"systemd"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "systemd" && echo "PASS: MCP find_process matching systemd"
+	@printf '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"find_process","arguments":{"name":"systemd"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "rss_kb" && echo "PASS: MCP find_process rss_kb field"
+	@printf '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"find_process","arguments":{"name":"__nonexistent_proc_xyz__"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q '\[\\n\]' && echo "PASS: MCP find_process empty matches returns empty array"
+	@printf '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":1}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "systemd" && echo "PASS: MCP process_details comm systemd"
+	@printf '{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":1}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "cmdline" && echo "PASS: MCP process_details cmdline"
+	@printf '{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":1}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "cgroup_path" && echo "PASS: MCP process_details cgroup_path"
+	@printf '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":1}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "rss_kb" && echo "PASS: MCP process_details rss_kb"
+	@printf '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":1}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q "threads" && echo "PASS: MCP process_details threads"
+	@printf '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"send_signal","arguments":{"pid":99999999,"signal":"TERM"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32000" && echo "PASS: MCP send_signal dispatches to target PID (safely fails on non-existent)"
+	@echo "=== Tier 4: Negative Trust & Error Responses ==="
+	@printf 'invalid json string\n' | ./$(BIN) --mcp | grep -q -- "-32600" && echo "PASS: MCP invalid json exits -32600"
+	@printf '{"jsonrpc":"1.0","id":30,"method":"ping","params":{}}\n' | ./$(BIN) --mcp | grep -q -- "-32600" && echo "PASS: MCP invalid jsonrpc version exits -32600"
+	@printf '{"jsonrpc":"2.0","id":31,"method":"","params":{}}\n' | ./$(BIN) --mcp | grep -q -- "-32600" && echo "PASS: MCP empty method exits -32600"
+	@printf '{"jsonrpc":"2.0","id":32,"method":"nonexistent_method","params":{}}\n' | ./$(BIN) --mcp | grep -q -- "-32601" && echo "PASS: MCP unknown method exits -32601"
+	@printf '{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}\n' | ./$(BIN) --mcp | grep -q -- "-32601" && echo "PASS: MCP unknown tool exits -32601"
+	@printf '{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"arguments":{}}}\n' | ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP missing tool name exits -32602"
+	@printf '{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"process_tree","arguments":{"format":"invalid_fmt"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP process_tree invalid format exits -32602"
+	@printf '{"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"find_process","arguments":{}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP find_process missing name exits -32602"
+	@printf '{"jsonrpc":"2.0","id":37,"method":"tools/call","params":{"name":"process_details","arguments":{}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP process_details missing pid exits -32602"
+	@printf '{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":-1}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP process_details negative pid exits -32602"
+	@printf '{"jsonrpc":"2.0","id":39,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":0}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP process_details pid 0 exits -32602"
+	@printf '{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":99999999}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP process_details nonexistent pid exits -32602"
+	@printf '{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"send_signal","arguments":{}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP send_signal missing pid exits -32602"
+	@printf '{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"send_signal","arguments":{"pid":-1,"signal":"TERM"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP send_signal negative pid rejection exits -32602"
+	@printf '{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"send_signal","arguments":{"pid":0,"signal":"TERM"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP send_signal pid 0 rejection exits -32602"
+	@printf '{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"send_signal","arguments":{"pid":1}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP send_signal missing signal exits -32602"
+	@printf '{"jsonrpc":"2.0","id":45,"method":"tools/call","params":{"name":"send_signal","arguments":{"pid":1,"signal":"INVALID_SIG"}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -q -- "-32602" && echo "PASS: MCP send_signal invalid signal exits -32602"
+	@echo "=== Double-Run Determinism & Response Consistency ==="
+	@run1="$$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n' | ./$(BIN) --mcp)"; \
+	run2="$$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n' | ./$(BIN) --mcp)"; \
+	test "$$run1" = "$$run2" && echo "PASS: determinism tools/list Run_1 == Run_2"
+	@run1="$$(printf '{"jsonrpc":"2.0","id":7,"method":"ping","params":{}}\n' | ./$(BIN) --mcp)"; \
+	run2="$$(printf '{"jsonrpc":"2.0","id":7,"method":"ping","params":{}}\n' | ./$(BIN) --mcp)"; \
+	test "$$run1" = "$$run2" && echo "PASS: determinism ping Run_1 == Run_2"
+	@run1="$$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":1}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -o 'systemd')"; \
+	run2="$$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":1}}}\n' | OODA_NO_JAIL=1 ./$(BIN) --mcp | grep -o 'systemd')"; \
+	test "$$run1" = "$$run2" && echo "PASS: determinism process_details PID 1 comm Run_1 == Run_2"
+	@echo "=== Packaging & Installer Smoke Tests ==="
+	@./install.sh --dry-run > /dev/null && echo "PASS: install.sh --dry-run"
+	@./install.sh --uninstall --dry-run > /dev/null && echo "PASS: install.sh --uninstall --dry-run"
+	@./uninstall.sh --dry-run > /dev/null && echo "PASS: uninstall.sh --dry-run"
 	@echo "ALL TESTS PASSED"
+
+bench: $(BIN)
+	@echo "=== Running oops performance benchmarks ==="
+	@echo "--- CLI tree rendering benchmark ---"
+	@time -p sh -c 'for i in $$(seq 1 30); do OODA_NO_JAIL=1 ./$(BIN) > /dev/null; done'
+	@echo "--- CLI flat listing benchmark ---"
+	@time -p sh -c 'for i in $$(seq 1 30); do OODA_NO_JAIL=1 ./$(BIN) -l > /dev/null; done'
+	@echo "--- MCP process_tree benchmark ---"
+	@time -p sh -c 'for i in $$(seq 1 30); do printf '\''{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"process_tree","arguments":{"format":"json"}}}\n'\'' | OODA_NO_JAIL=1 ./$(BIN) --mcp > /dev/null; done'
+	@echo "--- MCP find_process benchmark ---"
+	@time -p sh -c 'for i in $$(seq 1 50); do printf '\''{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_process","arguments":{"name":"systemd"}}}\n'\'' | OODA_NO_JAIL=1 ./$(BIN) --mcp > /dev/null; done'
+	@echo "--- MCP process_details benchmark ---"
+	@time -p sh -c 'for i in $$(seq 1 50); do printf '\''{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"process_details","arguments":{"pid":1}}}\n'\'' | OODA_NO_JAIL=1 ./$(BIN) --mcp > /dev/null; done'
+	@echo "Benchmark complete."
 
 install: $(BIN)
 	@mkdir -p $(DESTDIR)$(BINDIR)
@@ -146,7 +247,8 @@ package-rpm: $(BIN)
 	@cp uninstall.sh ~/rpmbuild/SOURCES/uninstall.sh
 	@sed "s/^Version:.*/Version: $(VERSION)/" packaging/oops.spec > ~/rpmbuild/SPECS/oops.spec
 	@rpmbuild -bb ~/rpmbuild/SPECS/oops.spec
-	@cp ~/rpmbuild/RPMS/x86_64/oops-$(VERSION)*.rpm dist/
+	@cp ~/rpmbuild/RPMS/x86_64/oops-$(VERSION)*.rpm dist/ 2>/dev/null || true
+	@if ls dist/oops-$(VERSION)-1.*.x86_64.rpm 1> /dev/null 2>&1; then cp dist/oops-$(VERSION)-1.*.x86_64.rpm dist/oops-$(VERSION)-1.x86_64.rpm; fi
 	@echo "built dist RPM package"
 
 package-arch: $(BIN)
@@ -155,14 +257,20 @@ package-arch: $(BIN)
 	@chmod 0755 dist/arch-pkg/usr/bin/oops
 	@cp uninstall.sh dist/arch-pkg/usr/bin/oops-uninstall
 	@chmod 0755 dist/arch-pkg/usr/bin/oops-uninstall
-	@printf "pkgname = oops\npkgbase = oops\npkgver = $(VERSION)-1\npkgdesc = Process tree visualizer and signal controller with systemd slice grouping\nurl = https://github.com/openOODA-tools/oops\nbuilddate = $$(date +%s)\npackager = openOODA-tools <ops@openooda.org>\nsize = $$(stat -c %s $(BIN))\narch = x86_64\nlicense = Apache-2.0\ndepend = glibc\nprovides = oops\n" > dist/arch-pkg/.PKGINFO
+	@printf "pkgname = oops\npkgbase = oops\npkgver = $(VERSION)-1\npkgdesc = Process tree visualizer and signal controller with systemd slice grouping and MCP surface\nurl = https://github.com/openOODA-tools/oops\nbuilddate = $$(date +%s)\npackager = openOODA-tools <ops@openooda.org>\nsize = $$(stat -c %s $(BIN))\narch = x86_64\nlicense = Apache-2.0\ndepend = glibc\nprovides = oops\n" > dist/arch-pkg/.PKGINFO
 	@tar --zstd -cf dist/oops-$(VERSION)-1-x86_64.pkg.tar.zst -C dist/arch-pkg .PKGINFO usr
 	@rm -rf dist/arch-pkg
 	@bash -n packaging/arch/PKGBUILD
+	@cp packaging/arch/PKGBUILD dist/PKGBUILD
 	@cp packaging/arch/PKGBUILD packaging/PKGBUILD
 	@echo "built dist/oops-$(VERSION)-1-x86_64.pkg.tar.zst and validated PKGBUILD"
 
 package: package-deb package-rpm package-arch
+	@cp $(BIN) dist/oops-linux-x86_64
+	@chmod 0755 dist/oops-linux-x86_64
+	@(cd dist && sha256sum oops-linux-x86_64 > oops-linux-x86_64.sha256)
+	@(cd dist && sha256sum oops* > checksums.txt)
+	@echo "built all packages and generated dist/checksums.txt"
 
 clean:
 	@rm -rf dist .ooda-cache

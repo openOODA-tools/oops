@@ -1,5 +1,5 @@
 Package: oops
-Version: 0.1.0-1
+Version: 0.2.0-1
 Section: utils
 Priority: optional
 Architecture: amd64
@@ -7,4 +7,4 @@ Maintainer: openOODA-tools <ops@openooda.org>
 Description: Process tree visualizer and signal controller with systemd slice grouping
  A process tree visualizer and signal controller written in pure openOODA, featuring
  native systemd slice classification, hierarchical tree visualization via oote palettes,
- safe signal dispatch under ProcessCap, and an MCP stdio surface.
+ safe signal dispatch under ProcessCap, and a streaming MCP stdio surface with 4 tools.

@@ -15,5 +15,5 @@ import "render/anchor.oo";
 import "ipc/anchor.oo";
 
 pub fn oops_version() -> String {
-    return "0.1.0";
+    return "0.2.0";
 }

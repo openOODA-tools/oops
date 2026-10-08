@@ -5,9 +5,9 @@
 // Setup: Requires FsReadCap and EnvCap. Operates with zero ambient authority.
 //
 // Beats:
-//   1. Resolve theme name from OODA_THEME or ~/.openooda/theme.oot with fallback.
+//   1. Resolve theme name from override, OODA_THEME, or ~/.openooda/theme.oot with fallback.
 //   2. Color-code process entities (PIDs, states, slice badges, and command names).
-//   3. Render process rows with tree branches and ANSI color accents.
+//   3. Render process rows with tree branches and ANSI color accents or plain text.
 
 import "std/fs/process/env.oo";
 import "proc/proc_info.oo";
@@ -56,7 +56,8 @@ pub fn parse_theme_key(content: String, key: String) -> String {
     return "";
 }
 
-pub fn resolve_ps_theme(fs: &FsReadCap, env: &EnvCap) -> String {
+pub fn resolve_ps_theme(fs: &FsReadCap, env: &EnvCap, theme_override: String) -> String {
+    if chars_len(theme_override) > 0 { return theme_override; }
     let env_t: Result[String, String] = env_get(env, "OODA_THEME");
     if env_t.is_ok() {
         let t: String = match env_t { Ok(s) => s, Err(_) => "" };
@@ -80,7 +81,8 @@ pub fn resolve_ps_theme(fs: &FsReadCap, env: &EnvCap) -> String {
     return if t != "" { t } else { "classic/1982" };
 }
 
-pub fn style_state(state: String) -> String {
+pub fn style_state(state: String, no_color: Bool) -> String {
+    if no_color { return state; }
     let esc: String = ansi_esc();
     let reset: String = term_reset();
     if state == "R" { return esc + "[1;32m" + state + reset; }
@@ -90,27 +92,31 @@ pub fn style_state(state: String) -> String {
     return esc + "[90m" + state + reset;
 }
 
-pub fn style_slice(slice: String) -> String {
+pub fn style_slice(slice: String, no_color: Bool) -> String {
+    let badge: String = get_slice_badge(slice);
+    if no_color { return badge; }
     let esc: String = ansi_esc();
     let reset: String = term_reset();
-    let badge: String = get_slice_badge(slice);
     if slice == "system.slice" { return esc + "[1;36m" + badge + reset; }
     if slice == "user.slice" { return esc + "[1;35m" + badge + reset; }
     if slice == "kernel" { return esc + "[90m" + badge + reset; }
     return esc + "[33m" + badge + reset;
 }
 
-pub fn render_process_row(p: ProcessInfo, prefix: String) -> String {
-    let esc: String = ansi_esc();
-    let reset: String = term_reset();
+pub fn render_process_row(p: ProcessInfo, prefix: String, no_color: Bool) -> String {
     let pid_str: String = to_string(p.pid);
     let mut padded_pid: String = pid_str;
     while chars_len(padded_pid) < 7 {
         padded_pid = " " + padded_pid;
     }
+    let st_col: String = style_state(p.state, no_color);
+    let sl_col: String = style_slice(p.slice, no_color);
+    if no_color {
+        return padded_pid + " " + st_col + " " + sl_col + " " + prefix + p.comm;
+    }
+    let esc: String = ansi_esc();
+    let reset: String = term_reset();
     let pid_col: String = esc + "[33m" + padded_pid + reset;
-    let st_col: String = style_state(p.state);
-    let sl_col: String = style_slice(p.slice);
     let comm_col: String = esc + "[1;37m" + p.comm + reset;
     let branch_col: String = esc + "[90m" + prefix + reset;
     return pid_col + " " + st_col + " " + sl_col + " " + branch_col + comm_col;
