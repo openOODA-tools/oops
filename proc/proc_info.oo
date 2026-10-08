@@ -69,14 +69,17 @@ pub fn parse_slice_from_cgroup(cgroup_content: String) -> String {
 pub fn extract_cgroup_path(cgroup_content: String) -> String {
     let n: Int = chars_len(cgroup_content);
     if n == 0 { return ""; }
+    let dcolon: Int = str_index_of(cgroup_content, "0::");
+    if dcolon >= 0 {
+        let rest: String = str_slice(cgroup_content, dcolon + 3, n);
+        let nl: Int = str_index_of(rest, "\n");
+        let path: String = if nl >= 0 { str_slice(rest, 0, nl) } else { rest };
+        return str_trim(path);
+    }
     let nl: Int = str_index_of(cgroup_content, "\n");
     let line: String = if nl >= 0 { str_slice(cgroup_content, 0, nl) } else { cgroup_content };
     let trimmed: String = str_trim(line);
     let tn: Int = chars_len(trimmed);
-    let dcolon: Int = str_index_of(trimmed, "::");
-    if dcolon >= 0 && dcolon + 2 <= tn {
-        return str_slice(trimmed, dcolon + 2, tn);
-    }
     let colon: Int = find_last_char(trimmed, ":");
     if colon >= 0 && colon + 1 <= tn {
         return str_slice(trimmed, colon + 1, tn);

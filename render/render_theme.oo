@@ -103,7 +103,15 @@ pub fn style_slice(slice: String, no_color: Bool) -> String {
     return esc + "[33m" + badge + reset;
 }
 
-pub fn render_process_row(p: ProcessInfo, prefix: String, no_color: Bool) -> String {
+pub fn theme_pid_color(theme: String) -> String {
+    if str_contains(theme, "dracula") || str_contains(theme, "amethyst") { return "35"; }
+    if str_contains(theme, "cyberpunk") || str_contains(theme, "matrix") { return "32"; }
+    if str_contains(theme, "amber") { return "33"; }
+    if str_contains(theme, "nord") || str_contains(theme, "ocean") { return "36"; }
+    return "33";
+}
+
+pub fn render_process_row(p: ProcessInfo, prefix: String, no_color: Bool, theme: String) -> String {
     let pid_str: String = to_string(p.pid);
     let mut padded_pid: String = pid_str;
     while chars_len(padded_pid) < 7 {
@@ -116,8 +124,43 @@ pub fn render_process_row(p: ProcessInfo, prefix: String, no_color: Bool) -> Str
     }
     let esc: String = ansi_esc();
     let reset: String = term_reset();
-    let pid_col: String = esc + "[33m" + padded_pid + reset;
+    let pid_code: String = theme_pid_color(theme);
+    let pid_col: String = esc + "[" + pid_code + "m" + padded_pid + reset;
     let comm_col: String = esc + "[1;37m" + p.comm + reset;
     let branch_col: String = esc + "[90m" + prefix + reset;
     return pid_col + " " + st_col + " " + sl_col + " " + branch_col + comm_col;
+}
+
+pub fn render_hierarchy_branch(
+    procs: List[ProcessInfo],
+    parent_pid: Int,
+    indent: String,
+    ascii_mode: Bool,
+    no_color: Bool,
+    theme: String,
+    depth: Int
+) -> String {
+    if depth > 64 { return ""; }
+    let children: List[ProcessInfo] = get_children(procs, parent_pid);
+    let nc: Int = list_len(children);
+    let mut out: String = "";
+    let mut i: Int = 0;
+    while i < nc {
+        let ch: ProcessInfo = list_get(children, i);
+        let is_last: Bool = (i == nc - 1);
+        let branch: String = if ascii_mode {
+            if is_last { "\\-- " } else { "|-- " }
+        } else {
+            if is_last { "└── " } else { "├── " }
+        };
+        out = out + render_process_row(ch, indent + branch, no_color, theme) + "\n";
+        let next_indent: String = indent + (if ascii_mode {
+            if is_last { "    " } else { "|   " }
+        } else {
+            if is_last { "    " } else { "│   " }
+        });
+        out = out + render_hierarchy_branch(procs, ch.pid, next_indent, ascii_mode, no_color, theme, depth + 1);
+        i = i + 1;
+    }
+    return out;
 }

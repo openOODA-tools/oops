@@ -64,7 +64,12 @@ pub fn main(
         return Ok(0);
     }
 
-    if chars_len(opts.signal_name) > 0 && opts.target_pid > 0 {
+    if chars_len(opts.signal_name) > 0 {
+        if opts.target_pid <= 0 {
+            println("oops: target PID required (-p <PID>) for signal dispatch");
+            process_exit(1);
+            return Ok(1);
+        }
         let signum: Int = parse_signum(opts.signal_name);
         if signum <= 0 {
             println("oops: invalid signal: " + opts.signal_name);
@@ -81,6 +86,7 @@ pub fn main(
         return Ok(1);
     }
 
+    let theme: String = resolve_ps_theme(fs, env, opts.theme_name);
     let no_color: Bool = resolve_no_color(opts, env);
     let all_procs: List[ProcessInfo] = scan_all_processes(fs);
     let mut procs: List[ProcessInfo] = all_procs;
@@ -107,7 +113,7 @@ pub fn main(
         let mut i: Int = 0;
         while i < n {
             let p: ProcessInfo = list_get(procs, i);
-            println(render_process_row(p, "", no_color));
+            println(render_process_row(p, "", no_color, theme));
             i = i + 1;
         }
         return Ok(0);
@@ -127,61 +133,12 @@ pub fn main(
     let mut r_idx: Int = 0;
     while r_idx < n_roots {
         let root: ProcessInfo = list_get(roots, r_idx);
-        println(render_process_row(root, "", no_color));
-
-        let children: List[ProcessInfo] = get_children(procs, root.pid);
-        let n_ch: Int = list_len(children);
-        let mut c_idx: Int = 0;
-        while c_idx < n_ch {
-            let ch: ProcessInfo = list_get(children, c_idx);
-            let is_last_c: Bool = (c_idx == n_ch - 1);
-            let branch: String = if opts.ascii_mode {
-                if is_last_c { "\\-- " } else { "|-- " }
-            } else {
-                if is_last_c { "└── " } else { "├── " }
-            };
-            let sub_indent: String = if opts.ascii_mode {
-                if is_last_c { "    " } else { "|   " }
-            } else {
-                if is_last_c { "    " } else { "│   " }
-            };
-            println(render_process_row(ch, branch, no_color));
-
-            let grand_children: List[ProcessInfo] = get_children(procs, ch.pid);
-            let n_gch: Int = list_len(grand_children);
-            let mut g_idx: Int = 0;
-            while g_idx < n_gch {
-                let gch: ProcessInfo = list_get(grand_children, g_idx);
-                let is_last_g: Bool = (g_idx == n_gch - 1);
-                let gbranch: String = if opts.ascii_mode {
-                    if is_last_g { sub_indent + "\\-- " } else { sub_indent + "|-- " }
-                } else {
-                    if is_last_g { sub_indent + "└── " } else { sub_indent + "├── " }
-                };
-                let sub2_indent: String = sub_indent + (if opts.ascii_mode {
-                    if is_last_g { "    " } else { "|   " }
-                } else {
-                    if is_last_g { "    " } else { "│   " }
-                });
-                println(render_process_row(gch, gbranch, no_color));
-
-                let gg_children: List[ProcessInfo] = get_children(procs, gch.pid);
-                let n_ggch: Int = list_len(gg_children);
-                let mut gg_idx: Int = 0;
-                while gg_idx < n_ggch {
-                    let ggch: ProcessInfo = list_get(gg_children, gg_idx);
-                    let is_last_gg: Bool = (gg_idx == n_ggch - 1);
-                    let ggbranch: String = if opts.ascii_mode {
-                        if is_last_gg { sub2_indent + "\\-- " } else { sub2_indent + "|-- " }
-                    } else {
-                        if is_last_gg { sub2_indent + "└── " } else { sub2_indent + "├── " }
-                    };
-                    println(render_process_row(ggch, ggbranch, no_color));
-                    gg_idx = gg_idx + 1;
-                }
-                g_idx = g_idx + 1;
-            }
-            c_idx = c_idx + 1;
+        println(render_process_row(root, "", no_color, theme));
+        let branch_text: String = render_hierarchy_branch(
+            procs, root.pid, "", opts.ascii_mode, no_color, theme, 1
+        );
+        if chars_len(branch_text) > 0 {
+            print(branch_text);
         }
         r_idx = r_idx + 1;
     }

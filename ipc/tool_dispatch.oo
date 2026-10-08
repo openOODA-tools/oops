@@ -37,44 +37,46 @@ pub fn tools_list_payload(id: String) -> String {
         + "]}}";
 }
 
-pub fn is_pure_positive_int(s: String) -> Bool {
+pub fn strip_quotes(s: String) -> String {
     let t: String = str_trim(s);
     let n: Int = chars_len(t);
-    if n == 0 { return false; }
-    let clean: String = if char_at(t, 0) == "\"" && char_at(t, n - 1) == "\"" && n > 2 {
-        str_slice(t, 1, n - 1)
-    } else {
-        t
-    };
+    if n >= 2 && char_at(t, 0) == "\"" && char_at(t, n - 1) == "\"" {
+        return str_slice(t, 1, n - 1);
+    }
+    return t;
+}
+
+pub fn parse_clean_int(s: String) -> Int {
+    let clean: String = strip_quotes(s);
     let cn: Int = chars_len(clean);
-    if cn == 0 { return false; }
+    if cn == 0 { return -1; }
     let mut i: Int = 0;
     while i < cn {
-        let c: String = char_at(clean, i);
-        if c != "0" && c != "1" && c != "2" && c != "3" && c != "4" &&
-           c != "5" && c != "6" && c != "7" && c != "8" && c != "9" {
-            return false;
-        }
+        let b: Int = byte_at(clean, i);
+        if b < 48 || b > 57 { return -1; }
         i = i + 1;
     }
-    let v: Int = parse_int_field(clean);
-    return v > 0;
+    return parse_int_field(clean);
+}
+
+pub fn is_pure_positive_int(s: String) -> Bool {
+    return parse_clean_int(s) > 0;
 }
 
 pub fn parse_signum(s: String) -> Int {
-    let trimmed: String = str_trim(s);
-    if trimmed == "HUP" || trimmed == "SIGHUP" || trimmed == "1" { return 1; }
-    if trimmed == "INT" || trimmed == "SIGINT" || trimmed == "2" { return 2; }
-    if trimmed == "QUIT" || trimmed == "SIGQUIT" || trimmed == "3" { return 3; }
-    if trimmed == "KILL" || trimmed == "SIGKILL" || trimmed == "9" { return 9; }
-    if trimmed == "USR1" || trimmed == "SIGUSR1" || trimmed == "10" { return 10; }
-    if trimmed == "USR2" || trimmed == "SIGUSR2" || trimmed == "12" { return 12; }
-    if trimmed == "TERM" || trimmed == "SIGTERM" || trimmed == "15" { return 15; }
-    if trimmed == "CONT" || trimmed == "SIGCONT" || trimmed == "18" { return 18; }
-    if trimmed == "STOP" || trimmed == "SIGSTOP" || trimmed == "19" { return 19; }
-    if trimmed == "WINCH" || trimmed == "SIGWINCH" || trimmed == "28" { return 28; }
+    let trimmed: String = strip_quotes(str_trim(s));
+    if trimmed == "HUP" || trimmed == "hup" || trimmed == "SIGHUP" || trimmed == "sighup" || trimmed == "1" { return 1; }
+    if trimmed == "INT" || trimmed == "int" || trimmed == "SIGINT" || trimmed == "sigint" || trimmed == "2" { return 2; }
+    if trimmed == "QUIT" || trimmed == "quit" || trimmed == "SIGQUIT" || trimmed == "sigquit" || trimmed == "3" { return 3; }
+    if trimmed == "KILL" || trimmed == "kill" || trimmed == "SIGKILL" || trimmed == "sigkill" || trimmed == "9" { return 9; }
+    if trimmed == "USR1" || trimmed == "usr1" || trimmed == "SIGUSR1" || trimmed == "sigusr1" || trimmed == "10" { return 10; }
+    if trimmed == "USR2" || trimmed == "usr2" || trimmed == "SIGUSR2" || trimmed == "sigusr2" || trimmed == "12" { return 12; }
+    if trimmed == "TERM" || trimmed == "term" || trimmed == "SIGTERM" || trimmed == "sigterm" || trimmed == "15" { return 15; }
+    if trimmed == "CONT" || trimmed == "cont" || trimmed == "SIGCONT" || trimmed == "sigcont" || trimmed == "18" { return 18; }
+    if trimmed == "STOP" || trimmed == "stop" || trimmed == "SIGSTOP" || trimmed == "sigstop" || trimmed == "19" { return 19; }
+    if trimmed == "WINCH" || trimmed == "winch" || trimmed == "SIGWINCH" || trimmed == "sigwinch" || trimmed == "28" { return 28; }
     if is_pure_positive_int(trimmed) {
-        let n: Int = parse_int_field(trimmed);
+        let n: Int = parse_clean_int(trimmed);
         if n >= 1 && n <= 64 { return n; }
     }
     return -1;
@@ -126,7 +128,11 @@ pub fn handle_tool_call(fs: &FsReadCap, proc_cap: &ProcessCap, id: String, req: 
     }
 
     if tool_name == "process_tree" {
+        let raw_fmt: String = json_field_raw(args, "format");
         let fmt_arg: String = json_field_string(args, "format");
+        if chars_len(raw_fmt) > 0 && chars_len(fmt_arg) == 0 {
+            return build_error(id, -32602, "invalid format, must be one of: tree, table, json");
+        }
         let fmt: String = if chars_len(fmt_arg) == 0 { "tree" } else { fmt_arg };
         if fmt != "tree" && fmt != "table" && fmt != "json" {
             return build_error(id, -32602, "invalid format, must be one of: tree, table, json");
@@ -154,6 +160,9 @@ pub fn handle_tool_call(fs: &FsReadCap, proc_cap: &ProcessCap, id: String, req: 
             return build_error(id, -32602, "missing required parameter: name");
         }
         let name: String = json_field_string(args, "name");
+        if chars_len(name) == 0 && raw_name != "\"\"" {
+            return build_error(id, -32602, "invalid parameter: name must be a string");
+        }
         let all_procs: List[ProcessInfo] = scan_all_processes(fs);
         let matches: List[ProcessInfo] = find_by_name(all_procs, name);
         return build_tool_result(id, render_procs_json_list(matches));
@@ -164,10 +173,10 @@ pub fn handle_tool_call(fs: &FsReadCap, proc_cap: &ProcessCap, id: String, req: 
         if chars_len(raw_pid) == 0 {
             return build_error(id, -32602, "missing required parameter: pid");
         }
-        if !is_pure_positive_int(raw_pid) {
+        let pid_val: Int = parse_clean_int(raw_pid);
+        if pid_val <= 0 {
             return build_error(id, -32602, "invalid pid: must be positive integer");
         }
-        let pid_val: Int = parse_int_field(raw_pid);
         let r: Result[ProcessDetails, String] = read_process_details(fs, pid_val);
         if r.is_err() {
             return build_error(id, -32602, "process not found: " + to_string(pid_val));
@@ -181,11 +190,14 @@ pub fn handle_tool_call(fs: &FsReadCap, proc_cap: &ProcessCap, id: String, req: 
         if chars_len(raw_pid) == 0 {
             return build_error(id, -32602, "missing required parameter: pid");
         }
-        if !is_pure_positive_int(raw_pid) {
+        let pid_val: Int = parse_clean_int(raw_pid);
+        if pid_val <= 0 {
             return build_error(id, -32602, "invalid pid: must be positive integer");
         }
-        let pid_val: Int = parse_int_field(raw_pid);
-        let raw_sig: String = json_field_string(args, "signal");
+        let mut raw_sig: String = json_field_string(args, "signal");
+        if chars_len(raw_sig) == 0 {
+            raw_sig = strip_quotes(json_field_raw(args, "signal"));
+        }
         if chars_len(raw_sig) == 0 {
             return build_error(id, -32602, "missing required parameter: signal");
         }

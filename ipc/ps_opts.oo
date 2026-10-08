@@ -135,8 +135,10 @@ pub fn parse_ps_args(args: List[String]) -> PsOpts {
             opts.theme_name = str_slice(arg, 8, arg_len);
         } else if str_starts_with(arg, "-theme=") {
             opts.theme_name = str_slice(arg, 7, arg_len);
-        } else if !str_starts_with(arg, "-") && i > 0 {
-            opts.name_filter = arg;
+        } else if !str_starts_with(arg, "-") {
+            if opts.name_filter == "" {
+                opts.name_filter = arg;
+            }
         }
         i = i + 1;
     }
